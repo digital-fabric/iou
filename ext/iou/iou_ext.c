@@ -2,6 +2,6 @@
 
 void Init_IOU();
 
-void Init_IOU_ext(void) {
+void Init_iou_ext(void) {
   Init_IOU();
 }

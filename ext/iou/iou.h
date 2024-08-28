@@ -1,9 +1,7 @@
-#ifndef POLYPHONY_H
-#define POLYPHONY_H
+#ifndef IOU_H
+#define IOU_H
 
 #include "ruby.h"
-#include "runqueue_ring_buffer.h"
-#include "backend_common.h"
 
 // debugging
 #define OBJ_ID(obj) (NUM2LONG(rb_funcall(obj, rb_intern("object_id"), 0)))
@@ -23,3 +21,5 @@
 
 
 extern VALUE mIOU;
+
+#endif // IOU_H
