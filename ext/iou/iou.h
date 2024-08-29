@@ -2,6 +2,7 @@
 #define IOU_H
 
 #include "ruby.h"
+#include <liburing.h>
 
 // debugging
 #define OBJ_ID(obj) (NUM2LONG(rb_funcall(obj, rb_intern("object_id"), 0)))
@@ -19,6 +20,13 @@
 #define likely(cond)	__builtin_expect(!!(cond), 1)
 #endif
 
+typedef struct IOU_t {
+  struct io_uring ring;
+  unsigned int    ring_initialized;
+  unsigned int    op_counter;
+  unsigned int    unsubmitted_sqes;
+  VALUE           pending_ops;
+} IOU_t;
 
 extern VALUE mIOU;
 
