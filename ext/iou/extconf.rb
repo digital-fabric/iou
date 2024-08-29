@@ -4,7 +4,7 @@ require 'rubygems'
 require 'mkmf'
 require 'rbconfig'
 
-dir_config 'polyphony_ext'
+dir_config 'iou_ext'
 
 KERNEL_INFO_RE = /Linux (\d)\.(\d+)(?:\.)?((?:\d+\.?)*)(?:\-)?([\w\-]+)?/
 def get_config
@@ -58,10 +58,6 @@ def define_bool(name, value)
   $defs << "-D#{name}=#{value ? 1 : 0 }"
 end
 
-$defs << '-DPOLYPHONY_USE_PIDFD_OPEN' if config[:pidfd_open]
-$defs << '-DPOLYPHONY_BACKEND_LIBURING'
-$defs << '-DPOLYPHONY_LINUX'
-$defs << '-DPOLYPHONY_UNSET_NONBLOCK' if RUBY_VERSION =~ /^3/
 $defs << '-DHAVE_IO_URING_PREP_MULTISHOT_ACCEPT'  if config[:multishot_accept]
 $defs << '-DHAVE_IO_URING_PREP_RECV_MULTISHOT'    if config[:multishot_recv]
 $defs << '-DHAVE_IO_URING_PREP_RECVMSG_MULTISHOT' if config[:multishot_recvmsg]
@@ -72,13 +68,5 @@ $defs << '-DHAVE_IORING_SETUP_SINGLE_ISSUER'      if config[:single_issuer_flag]
 $CFLAGS << ' -Wno-pointer-arith'
 
 CONFIG['optflags'] << ' -fno-strict-aliasing'
-
-have_header('ruby/io/buffer.h')
-have_func('rb_fiber_transfer')
-have_func('rb_io_path')
-have_func('rb_io_descriptor')
-have_func('rb_io_get_write_io')
-have_func('rb_io_closed_p')
-have_func('rb_io_open_descriptor')
 
 create_makefile 'iou_ext'
