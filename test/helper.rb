@@ -36,9 +36,9 @@ module ::Kernel
 end
 
 module Minitest::Assertions
-  def setup
-    sleep 0.0001
-  end
+  # def setup
+  #   sleep 0.0001
+  # end
 
   def assert_in_range exp_range, act
     msg = message(msg) { "Expected #{mu_pp(act)} to be in range #{mu_pp(exp_range)}" }

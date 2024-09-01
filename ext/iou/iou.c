@@ -48,7 +48,7 @@ VALUE IOU_initialize(VALUE self) {
   iou->op_counter = 0;
   iou->unsubmitted_sqes = 0;
 
-  iou->pending_ops = rb_ary_new();
+  iou->pending_ops = rb_hash_new();
 
   unsigned int prepared_limit = 1024;
   int flags = 0;
@@ -78,6 +78,21 @@ VALUE IOU_initialize(VALUE self) {
   return self;
 }
 
+VALUE IOU_close(VALUE self) {
+  IOU_t *iou = RTYPEDDATA_DATA(self);
+  if (!iou->ring_initialized) goto done;
+
+  io_uring_queue_exit(&iou->ring);
+  iou->ring_initialized = 0;
+done:
+  return self;
+}
+
+VALUE IOU_closed_p(VALUE self) {
+  IOU_t *iou = RTYPEDDATA_DATA(self);
+  return iou->ring_initialized ? Qfalse : Qtrue;
+}
+
 inline IOU_t *get_iou(VALUE self) {
   IOU_t *iou = RTYPEDDATA_DATA(self);
   if (!iou->ring_initialized)
@@ -104,13 +119,28 @@ done:
   return sqe;
 }
 
-VALUE IOU_prep_timeout(VALUE self, VALUE opts) {
+VALUE IOU_prep_cancel(VALUE self, VALUE op_id) {
+  IOU_t *iou = get_iou(self);
+  unsigned int op_id_i = NUM2UINT(op_id);
+  
+  unsigned int id_i = ++iou->op_counter;
+  VALUE id = UINT2NUM(id_i);
+
+  struct io_uring_sqe *sqe = get_sqe(iou);
+  io_uring_prep_cancel64(sqe, op_id_i, 0);
+  sqe->user_data = id_i;
+  iou->unsubmitted_sqes++;
+
+  return id;
+}
+
+VALUE IOU_prep_timeout(VALUE self, VALUE op) {
   IOU_t *iou = get_iou(self);
   unsigned int id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
   iou->unsubmitted_sqes++;
 
-  VALUE period = rb_hash_aref(opts, SYM_period);
+  VALUE period = rb_hash_aref(op, SYM_period);
   if (NIL_P(period))
     rb_raise(rb_eRuntimeError, "Missing period value");
   VALUE time_spec = rb_funcall(cTimeSpec, rb_intern("new"), 1, period);
@@ -119,15 +149,14 @@ VALUE IOU_prep_timeout(VALUE self, VALUE opts) {
   sqe->user_data = id_i;
 
   // annotate op
-  rb_hash_aset(opts, SYM_id, id);
-  rb_hash_aset(opts, SYM_op, SYM_timeout);
-  rb_hash_aset(opts, SYM_ts, time_spec);
+  rb_hash_aset(op, SYM_id, id);
+  rb_hash_aset(op, SYM_op, SYM_timeout);
+  rb_hash_aset(op, SYM_ts, time_spec);
 
   // add to pending ops hash
-  rb_hash_aset(iou->pending_ops, id, opts);
+  rb_hash_aset(iou->pending_ops, id, op);
 
   io_uring_prep_timeout(sqe, TimeSpec_ts_ptr(time_spec), 0, 0);
-
   return id;
 }
 
@@ -136,7 +165,6 @@ VALUE IOU_submit(VALUE self) {
   iou->unsubmitted_sqes = 0;
 
   io_uring_submit(&iou->ring);
-
   return self;
 }
 
@@ -157,10 +185,11 @@ VALUE IOU_wait_for_completion(VALUE self) {
   if (unlikely(ret < 0)) {
     rb_syserr_fail(-ret, strerror(-ret));
   }
+  io_uring_cqe_seen(&iou->ring, cqe);
 
   VALUE id = UINT2NUM(cqe->user_data);
   VALUE op = rb_hash_aref(iou->pending_ops, id);
-  VALUE result = UINT2NUM(cqe->res);
+  VALUE result = INT2NUM(cqe->res);
   if (NIL_P(op))
     return make_empty_op_with_result(id, result);
 
@@ -177,7 +206,10 @@ void Init_IOU(void) {
   rb_define_alloc_func(cRing, IOU_allocate);
 
   rb_define_method(cRing, "initialize", IOU_initialize, 0);
+  rb_define_method(cRing, "close", IOU_close, 0);
+  rb_define_method(cRing, "closed?", IOU_closed_p, 0);
   
+  rb_define_method(cRing, "prep_cancel", IOU_prep_cancel, 1);
   rb_define_method(cRing, "prep_timeout", IOU_prep_timeout, 1);
 
   rb_define_method(cRing, "submit", IOU_submit, 0);
