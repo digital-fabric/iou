@@ -2,7 +2,7 @@
 
 require_relative 'helper'
 
-class IOUTest < Minitest::Test
+class IOURingTest < Minitest::Test
   attr_accessor :ring
   
   def setup
@@ -60,13 +60,24 @@ class IOUTest < Minitest::Test
     assert_equal -Errno::ECANCELED::Errno, c[:result]
   end
 
+  def test_prep_write
+    ring = IOU::Ring.new
+    r, w = IO.pipe
+    s = 'foobar'
 
-  # def test_write
-  #   ring = IOU::Ring.new
-  #   r, w = IO.pipe
-  #   s = 'foobar'
+    id = ring.prep_write(fd: w.fileno, buffer: s)
+    assert_equal 1, id
 
-  #   ring.prep_write(fd: w.fileno, buffer: s)
+    ring.submit
+    c = ring.wait_for_completion
 
-  # end
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :write, c[:op]
+    assert_equal w.fileno, c[:fd]
+    assert_equal s.bytesize, c[:result]
+
+    w.close
+    assert_equal s, r.read
+  end
 end

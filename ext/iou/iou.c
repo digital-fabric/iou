@@ -3,12 +3,16 @@
 VALUE mIOU;
 VALUE cRing;
 
+VALUE SYM_buffer;
+VALUE SYM_fd;
 VALUE SYM_id;
+VALUE SYM_len;
 VALUE SYM_op;
 VALUE SYM_period;
 VALUE SYM_result;
 VALUE SYM_timeout;
 VALUE SYM_ts;
+VALUE SYM_write;
 
 static void IOU_mark(void *ptr) {
   IOU_t *iou = ptr;
@@ -160,6 +164,37 @@ VALUE IOU_prep_timeout(VALUE self, VALUE op) {
   return id;
 }
 
+VALUE IOU_prep_write(VALUE self, VALUE op) {
+  IOU_t *iou = get_iou(self);
+  unsigned int id_i = ++iou->op_counter;
+  VALUE id = UINT2NUM(id_i);
+  iou->unsubmitted_sqes++;
+
+  VALUE fd = rb_hash_aref(op, SYM_fd);
+  if (NIL_P(fd))
+    rb_raise(rb_eRuntimeError, "Missing fd value");
+
+  VALUE buffer = rb_hash_aref(op, SYM_buffer);
+  if (NIL_P(buffer))
+    rb_raise(rb_eRuntimeError, "Missing buffer value");
+
+  VALUE len = rb_hash_aref(op, SYM_len);
+  unsigned int nbytes = NIL_P(len) ? RSTRING_LEN(buffer) : NUM2UINT(len);
+
+  struct io_uring_sqe *sqe = get_sqe(iou);
+  sqe->user_data = id_i;
+
+  // annotate op
+  rb_hash_aset(op, SYM_id, id);
+  rb_hash_aset(op, SYM_op, SYM_write);
+
+  // add to pending ops hash
+  rb_hash_aset(iou->pending_ops, id, op);
+
+  io_uring_prep_write(sqe, NUM2INT(fd), RSTRING_PTR(buffer), nbytes, 0);
+  return id;
+}
+
 VALUE IOU_submit(VALUE self) {
   IOU_t *iou = get_iou(self);
   iou->unsubmitted_sqes = 0;
@@ -211,14 +246,19 @@ void Init_IOU(void) {
   
   rb_define_method(cRing, "prep_cancel", IOU_prep_cancel, 1);
   rb_define_method(cRing, "prep_timeout", IOU_prep_timeout, 1);
+  rb_define_method(cRing, "prep_write", IOU_prep_write, 1);
 
   rb_define_method(cRing, "submit", IOU_submit, 0);
   rb_define_method(cRing, "wait_for_completion", IOU_wait_for_completion, 0);
 
+  SYM_buffer  = MAKE_SYM("buffer");
+  SYM_fd      = MAKE_SYM("fd");
   SYM_id      = MAKE_SYM("id");
+  SYM_len     = MAKE_SYM("len");
   SYM_op      = MAKE_SYM("op");
   SYM_period  = MAKE_SYM("period");
   SYM_result  = MAKE_SYM("result");
   SYM_timeout = MAKE_SYM("timeout");
   SYM_ts      = MAKE_SYM("ts");
+  SYM_write   = MAKE_SYM("write");
 }
