@@ -1,4 +1,5 @@
 #include "iou.h"
+#include "ruby/thread.h"
 
 VALUE mIOU;
 VALUE cRing;
@@ -237,20 +238,35 @@ inline VALUE make_empty_op_with_result(VALUE id, VALUE result) {
   return hash;
 }
 
-VALUE IOU_wait_for_completion(VALUE self) {
-  IOU_t *iou = get_iou(self);
+typedef struct {
+  IOU_t *iou;
   struct io_uring_cqe *cqe;
   int ret;
+}  wait_for_completion_ctx_t;
 
-  ret = io_uring_wait_cqe(&iou->ring, &cqe);
-  if (unlikely(ret < 0)) {
-    rb_syserr_fail(-ret, strerror(-ret));
+void *wait_for_completion_without_gvl(void *ptr) {
+  wait_for_completion_ctx_t *ctx = (wait_for_completion_ctx_t *)ptr;
+  ctx->ret = io_uring_wait_cqe(&ctx->iou->ring, &ctx->cqe);
+  return NULL;
+}
+
+VALUE IOU_wait_for_completion(VALUE self) {
+  IOU_t *iou = get_iou(self);
+
+  wait_for_completion_ctx_t ctx = {
+    .iou = iou
+  };
+
+  rb_thread_call_without_gvl(wait_for_completion_without_gvl, (void *)&ctx, RUBY_UBF_IO, 0);
+
+  if (unlikely(ctx.ret < 0)) {
+    rb_syserr_fail(-ctx.ret, strerror(-ctx.ret));
   }
-  io_uring_cqe_seen(&iou->ring, cqe);
+  io_uring_cqe_seen(&iou->ring, ctx.cqe);
 
-  VALUE id = UINT2NUM(cqe->user_data);
+  VALUE id = UINT2NUM(ctx.cqe->user_data);
   VALUE op = rb_hash_aref(iou->pending_ops, id);
-  VALUE result = INT2NUM(cqe->res);
+  VALUE result = INT2NUM(ctx.cqe->res);
   if (NIL_P(op))
     return make_empty_op_with_result(id, result);
 
