@@ -2,6 +2,7 @@
 
 VALUE mIOU;
 VALUE cRing;
+VALUE cArgumentError;
 
 VALUE SYM_buffer;
 VALUE SYM_fd;
@@ -123,10 +124,23 @@ done:
   return sqe;
 }
 
-VALUE IOU_prep_cancel(VALUE self, VALUE op_id) {
-  IOU_t *iou = get_iou(self);
-  unsigned int op_id_i = NUM2UINT(op_id);
-  
+static inline void get_required_kwargs(VALUE spec, VALUE *values, int argc, ...) {
+  if (TYPE(spec) != T_HASH)
+    rb_raise(cArgumentError, "Expected keyword arguments");
+
+  va_list ptr;
+  va_start(ptr, argc);
+  for (int i = 0; i < argc; i++) {
+    VALUE k = va_arg(ptr, VALUE);
+    VALUE v = rb_hash_aref(spec, k);
+    if (NIL_P(v))
+      rb_raise(cArgumentError, "Missing %"PRIsVALUE" value", k);
+    values[i] = v;
+  }
+  va_end(ptr);
+}
+
+VALUE prep_cancel_id(IOU_t *iou, unsigned int op_id_i) {
   unsigned int id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
 
@@ -138,58 +152,70 @@ VALUE IOU_prep_cancel(VALUE self, VALUE op_id) {
   return id;
 }
 
-VALUE IOU_prep_timeout(VALUE self, VALUE op) {
+VALUE IOU_prep_cancel(VALUE self, VALUE spec) {
+  IOU_t *iou = get_iou(self);
+
+  if (TYPE(spec) == T_FIXNUM)
+    return prep_cancel_id(iou, NUM2UINT(spec));
+  
+  if (TYPE(spec) != T_HASH)
+    rb_raise(cArgumentError, "Expected operation id or keyword arguments");
+
+  VALUE id = rb_hash_aref(spec, SYM_id);
+  if (!NIL_P(id))
+    return prep_cancel_id(iou, NUM2UINT(id));
+
+  rb_raise(cArgumentError, "Missing operation id");
+}
+
+VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
   IOU_t *iou = get_iou(self);
   unsigned int id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
   iou->unsubmitted_sqes++;
 
-  VALUE period = rb_hash_aref(op, SYM_period);
-  if (NIL_P(period))
-    rb_raise(rb_eRuntimeError, "Missing period value");
-  VALUE time_spec = rb_funcall(cTimeSpec, rb_intern("new"), 1, period);
+  VALUE values[1];
+  get_required_kwargs(spec, values, 1, SYM_period);
 
+  VALUE time_spec = rb_funcall(cTimeSpec, rb_intern("new"), 1, values[0]);
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
 
   // annotate op
-  rb_hash_aset(op, SYM_id, id);
-  rb_hash_aset(op, SYM_op, SYM_timeout);
-  rb_hash_aset(op, SYM_ts, time_spec);
+  rb_hash_aset(spec, SYM_id, id);
+  rb_hash_aset(spec, SYM_op, SYM_timeout);
+  rb_hash_aset(spec, SYM_ts, time_spec);
 
   // add to pending ops hash
-  rb_hash_aset(iou->pending_ops, id, op);
+  rb_hash_aset(iou->pending_ops, id, spec);
 
   io_uring_prep_timeout(sqe, TimeSpec_ts_ptr(time_spec), 0, 0);
   return id;
 }
 
-VALUE IOU_prep_write(VALUE self, VALUE op) {
+VALUE IOU_prep_write(VALUE self, VALUE spec) {
   IOU_t *iou = get_iou(self);
   unsigned int id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
   iou->unsubmitted_sqes++;
 
-  VALUE fd = rb_hash_aref(op, SYM_fd);
-  if (NIL_P(fd))
-    rb_raise(rb_eRuntimeError, "Missing fd value");
+  VALUE values[2];
+  get_required_kwargs(spec, values, 2, SYM_fd, SYM_buffer);
 
-  VALUE buffer = rb_hash_aref(op, SYM_buffer);
-  if (NIL_P(buffer))
-    rb_raise(rb_eRuntimeError, "Missing buffer value");
-
-  VALUE len = rb_hash_aref(op, SYM_len);
+  VALUE fd = values[0];
+  VALUE buffer = values[1];
+  VALUE len = rb_hash_aref(spec, SYM_len);
   unsigned int nbytes = NIL_P(len) ? RSTRING_LEN(buffer) : NUM2UINT(len);
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
 
   // annotate op
-  rb_hash_aset(op, SYM_id, id);
-  rb_hash_aset(op, SYM_op, SYM_write);
+  rb_hash_aset(spec, SYM_id, id);
+  rb_hash_aset(spec, SYM_op, SYM_write);
 
   // add to pending ops hash
-  rb_hash_aset(iou->pending_ops, id, op);
+  rb_hash_aset(iou->pending_ops, id, spec);
 
   io_uring_prep_write(sqe, NUM2INT(fd), RSTRING_PTR(buffer), nbytes, 0);
   return id;
@@ -250,6 +276,8 @@ void Init_IOU(void) {
 
   rb_define_method(cRing, "submit", IOU_submit, 0);
   rb_define_method(cRing, "wait_for_completion", IOU_wait_for_completion, 0);
+
+  cArgumentError = rb_const_get(rb_cObject, rb_intern("ArgumentError"));
 
   SYM_buffer  = MAKE_SYM("buffer");
   SYM_fd      = MAKE_SYM("fd");
