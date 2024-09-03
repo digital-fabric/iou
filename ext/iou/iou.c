@@ -11,7 +11,7 @@ VALUE SYM_fd;
 VALUE SYM_id;
 VALUE SYM_len;
 VALUE SYM_op;
-VALUE SYM_period;
+VALUE SYM_interval;
 VALUE SYM_result;
 VALUE SYM_timeout;
 VALUE SYM_ts;
@@ -193,7 +193,7 @@ VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
   iou->unsubmitted_sqes++;
 
   VALUE values[1];
-  get_required_kwargs(spec, values, 1, SYM_period);
+  get_required_kwargs(spec, values, 1, SYM_interval);
 
   VALUE time_spec = rb_funcall(cTimeSpec, rb_intern("new"), 1, values[0]);
   struct io_uring_sqe *sqe = get_sqe(iou);
@@ -391,7 +391,7 @@ void Init_IOU(void) {
   SYM_id      = MAKE_SYM("id");
   SYM_len     = MAKE_SYM("len");
   SYM_op      = MAKE_SYM("op");
-  SYM_period  = MAKE_SYM("period");
+  SYM_interval  = MAKE_SYM("interval");
   SYM_result  = MAKE_SYM("result");
   SYM_timeout = MAKE_SYM("timeout");
   SYM_ts      = MAKE_SYM("ts");

@@ -26,21 +26,21 @@ end
 
 class PrepTimeoutTest < IOURingBaseTest
   def test_prep_timeout
-    period = 0.03
+    interval = 0.03
 
     t0 = monotonic_clock
-    id = ring.prep_timeout(period: period)
+    id = ring.prep_timeout(interval: interval)
     assert_equal 1, id
 
     ring.submit
     c = ring.wait_for_completion
     elapsed = monotonic_clock - t0
-    assert_in_range period..(period + 0.02), elapsed
+    assert_in_range interval..(interval + 0.02), elapsed
 
     assert_kind_of Hash, c
     assert_equal id, c[:id]
     assert_equal :timeout, c[:op]
-    assert_equal period, c[:period]
+    assert_equal interval, c[:interval]
     assert_equal -Errno::ETIME::Errno, c[:result]
   end
 
@@ -53,8 +53,8 @@ end
 
 class PrepCancelTest < IOURingBaseTest
   def test_prep_cancel
-    period = 15
-    timeout_id = ring.prep_timeout(period: period)
+    interval = 15
+    timeout_id = ring.prep_timeout(interval: interval)
     assert_equal 1, timeout_id
 
     cancel_id = ring.prep_cancel(timeout_id)
@@ -68,13 +68,13 @@ class PrepCancelTest < IOURingBaseTest
     c = ring.wait_for_completion
     assert_equal timeout_id, c[:id]
     assert_equal :timeout, c[:op]
-    assert_equal period, c[:period]
+    assert_equal interval, c[:interval]
     assert_equal -Errno::ECANCELED::Errno, c[:result]
   end
 
   def test_prep_cancel_kw
-    period = 15
-    timeout_id = ring.prep_timeout(period: period)
+    interval = 15
+    timeout_id = ring.prep_timeout(interval: interval)
     assert_equal 1, timeout_id
 
     cancel_id = ring.prep_cancel(id: timeout_id)
@@ -88,7 +88,7 @@ class PrepCancelTest < IOURingBaseTest
     c = ring.wait_for_completion
     assert_equal timeout_id, c[:id]
     assert_equal :timeout, c[:op]
-    assert_equal period, c[:period]
+    assert_equal interval, c[:interval]
     assert_equal -Errno::ECANCELED::Errno, c[:result]
   end
 
@@ -278,8 +278,8 @@ class ProcessCompletionsTest < IOURingBaseTest
   def test_process_completions_op_with_block
     cc = []
 
-    id1 = ring.prep_timeout(period: 0.01) { cc << 1 }
-    id2 = ring.prep_timeout(period: 0.02) { cc << 2 }
+    id1 = ring.prep_timeout(interval: 0.01) { cc << 1 }
+    id2 = ring.prep_timeout(interval: 0.02) { cc << 2 }
     ring.submit
 
     ret = ring.process_completions
@@ -296,8 +296,8 @@ class ProcessCompletionsTest < IOURingBaseTest
   def test_process_completions_op_with_block_no_submit
     cc = []
 
-    id1 = ring.prep_timeout(period: 0.01) { cc << 1 }
-    id2 = ring.prep_timeout(period: 0.02) { cc << 2 }
+    id1 = ring.prep_timeout(interval: 0.01) { cc << 1 }
+    id2 = ring.prep_timeout(interval: 0.02) { cc << 2 }
 
     ret = ring.process_completions
     assert_equal 0, ret
