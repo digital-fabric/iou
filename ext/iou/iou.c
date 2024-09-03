@@ -5,6 +5,7 @@ VALUE mIOU;
 VALUE cRing;
 VALUE cArgumentError;
 
+VALUE SYM_block;
 VALUE SYM_buffer;
 VALUE SYM_fd;
 VALUE SYM_id;
@@ -56,7 +57,7 @@ VALUE IOU_initialize(VALUE self) {
 
   iou->pending_ops = rb_hash_new();
 
-  unsigned int prepared_limit = 1024;
+  unsigned prepared_limit = 1024;
   int flags = 0;
   #ifdef HAVE_IORING_SETUP_SUBMIT_ALL
   flags |= IORING_SETUP_SUBMIT_ALL;
@@ -141,8 +142,8 @@ static inline void get_required_kwargs(VALUE spec, VALUE *values, int argc, ...)
   va_end(ptr);
 }
 
-VALUE prep_cancel_id(IOU_t *iou, unsigned int op_id_i) {
-  unsigned int id_i = ++iou->op_counter;
+VALUE prep_cancel_id(IOU_t *iou, unsigned op_id_i) {
+  unsigned id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
 
   struct io_uring_sqe *sqe = get_sqe(iou);
@@ -169,9 +170,29 @@ VALUE IOU_prep_cancel(VALUE self, VALUE spec) {
   rb_raise(cArgumentError, "Missing operation id");
 }
 
+VALUE IOU_prep_nop(VALUE self) {
+  IOU_t *iou = get_iou(self);
+  unsigned id_i = ++iou->op_counter;
+  VALUE id = UINT2NUM(id_i);
+
+  struct io_uring_sqe *sqe = get_sqe(iou);
+  io_uring_prep_nop(sqe);
+  sqe->user_data = id_i;
+  iou->unsubmitted_sqes++;
+
+  return id;
+}
+
+inline void annotate_spec(VALUE spec, VALUE id, VALUE op) {
+  rb_hash_aset(spec, SYM_id, id);
+  rb_hash_aset(spec, SYM_op, op);
+  if (rb_block_given_p())
+    rb_hash_aset(spec, SYM_block, rb_block_proc());
+}
+
 VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
   IOU_t *iou = get_iou(self);
-  unsigned int id_i = ++iou->op_counter;
+  unsigned id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
   iou->unsubmitted_sqes++;
 
@@ -182,12 +203,8 @@ VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
 
-  // annotate op
-  rb_hash_aset(spec, SYM_id, id);
-  rb_hash_aset(spec, SYM_op, SYM_timeout);
+  annotate_spec(spec, id, SYM_timeout);
   rb_hash_aset(spec, SYM_ts, time_spec);
-
-  // add to pending ops hash
   rb_hash_aset(iou->pending_ops, id, spec);
 
   io_uring_prep_timeout(sqe, TimeSpec_ts_ptr(time_spec), 0, 0);
@@ -196,7 +213,7 @@ VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
 
 VALUE IOU_prep_write(VALUE self, VALUE spec) {
   IOU_t *iou = get_iou(self);
-  unsigned int id_i = ++iou->op_counter;
+  unsigned id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
   iou->unsubmitted_sqes++;
 
@@ -206,16 +223,12 @@ VALUE IOU_prep_write(VALUE self, VALUE spec) {
   VALUE fd = values[0];
   VALUE buffer = values[1];
   VALUE len = rb_hash_aref(spec, SYM_len);
-  unsigned int nbytes = NIL_P(len) ? RSTRING_LEN(buffer) : NUM2UINT(len);
+  unsigned nbytes = NIL_P(len) ? RSTRING_LEN(buffer) : NUM2UINT(len);
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
 
-  // annotate op
-  rb_hash_aset(spec, SYM_id, id);
-  rb_hash_aset(spec, SYM_op, SYM_write);
-
-  // add to pending ops hash
+  annotate_spec(spec, id, SYM_write);
   rb_hash_aset(iou->pending_ops, id, spec);
 
   io_uring_prep_write(sqe, NUM2INT(fd), RSTRING_PTR(buffer), nbytes, 0);
@@ -250,6 +263,18 @@ void *wait_for_completion_without_gvl(void *ptr) {
   return NULL;
 }
 
+static inline VALUE pull_cqe_op_spec(IOU_t *iou, struct io_uring_cqe *cqe) {
+  VALUE id = UINT2NUM(cqe->user_data);
+  VALUE op = rb_hash_aref(iou->pending_ops, id);
+  VALUE result = INT2NUM(cqe->res);
+  if (NIL_P(op))
+    return make_empty_op_with_result(id, result);
+
+  rb_hash_delete(iou->pending_ops, id);
+  rb_hash_aset(op, SYM_result, result);
+  return op;
+}
+
 VALUE IOU_wait_for_completion(VALUE self) {
   IOU_t *iou = get_iou(self);
 
@@ -263,16 +288,92 @@ VALUE IOU_wait_for_completion(VALUE self) {
     rb_syserr_fail(-ctx.ret, strerror(-ctx.ret));
   }
   io_uring_cqe_seen(&iou->ring, ctx.cqe);
+  return pull_cqe_op_spec(iou, ctx.cqe);
 
-  VALUE id = UINT2NUM(ctx.cqe->user_data);
-  VALUE op = rb_hash_aref(iou->pending_ops, id);
-  VALUE result = INT2NUM(ctx.cqe->res);
-  if (NIL_P(op))
-    return make_empty_op_with_result(id, result);
+  // VALUE id = UINT2NUM(ctx.cqe->user_data);
+  // VALUE op = rb_hash_aref(iou->pending_ops, id);
+  // VALUE result = INT2NUM(ctx.cqe->res);
+  // if (NIL_P(op))
+  //   return make_empty_op_with_result(id, result);
+  // else
+  //   rb_hash_delete(iou->pending_ops, id);
 
-  rb_hash_aset(op, SYM_result, result);
-  RB_GC_GUARD(op);
-  return op;
+  // rb_hash_aset(op, SYM_result, result);
+  // RB_GC_GUARD(op);
+  // return op;
+}
+
+static inline void process_cqe(IOU_t *iou, struct io_uring_cqe *cqe) {
+  VALUE spec = pull_cqe_op_spec(iou, cqe);
+  VALUE block = rb_hash_aref(spec, SYM_block);
+  
+  if (rb_block_given_p())
+    rb_yield(spec);
+  else if (RTEST(block))
+    rb_proc_call_with_block_kw(block, 1, &spec, Qnil, Qnil);
+}
+
+// copied from liburing/queue.c
+static inline bool cq_ring_needs_flush(struct io_uring *ring) {
+  return IO_URING_READ_ONCE(*ring->sq.kflags) & IORING_SQ_CQ_OVERFLOW;
+}
+
+// adapted from io_uring_peek_batch_cqe in liburing/queue.c
+// this peeks at cqes and handles each available cqe
+static inline int process_ready_cqes(IOU_t *iou) {
+  unsigned total_count = 0;
+
+iterate:
+  bool overflow_checked = false;
+  struct io_uring_cqe *cqe;
+  unsigned head;
+  unsigned count = 0;
+  io_uring_for_each_cqe(&iou->ring, head, cqe) {
+    ++count;
+    process_cqe(iou, cqe);
+  }
+  io_uring_cq_advance(&iou->ring, count);
+  total_count += count;
+
+  if (overflow_checked) goto done;
+
+  if (cq_ring_needs_flush(&iou->ring)) {
+    io_uring_enter(iou->ring.ring_fd, 0, 0, IORING_ENTER_GETEVENTS, NULL);
+    overflow_checked = true;
+    goto iterate;
+  }
+
+done:
+  return total_count;
+}
+
+VALUE IOU_process_completions(int argc, VALUE *argv, VALUE self) {
+  IOU_t *iou = get_iou(self);
+  VALUE wait;
+
+  rb_scan_args(argc, argv, "01", &wait);
+  int wait_i = RTEST(wait);
+  unsigned count = 0;
+
+  if (iou->unsubmitted_sqes) {
+    io_uring_submit(&iou->ring);
+    iou->unsubmitted_sqes = 0;
+  }
+
+  if (wait_i) {
+    wait_for_completion_ctx_t ctx = { .iou = iou };
+
+    rb_thread_call_without_gvl(wait_for_completion_without_gvl, (void *)&ctx, RUBY_UBF_IO, 0);
+    if (unlikely(ctx.ret < 0)) {
+      rb_syserr_fail(-ctx.ret, strerror(-ctx.ret));
+    }
+    ++count;
+    io_uring_cqe_seen(&iou->ring, ctx.cqe);
+    process_cqe(iou, ctx.cqe);
+  }
+
+  count += process_ready_cqes(iou);
+  return UINT2NUM(count);
 }
 
 #define MAKE_SYM(sym) ID2SYM(rb_intern(sym))
@@ -287,14 +388,17 @@ void Init_IOU(void) {
   rb_define_method(cRing, "closed?", IOU_closed_p, 0);
   
   rb_define_method(cRing, "prep_cancel", IOU_prep_cancel, 1);
+  rb_define_method(cRing, "prep_nop", IOU_prep_nop, 0);
   rb_define_method(cRing, "prep_timeout", IOU_prep_timeout, 1);
   rb_define_method(cRing, "prep_write", IOU_prep_write, 1);
 
   rb_define_method(cRing, "submit", IOU_submit, 0);
   rb_define_method(cRing, "wait_for_completion", IOU_wait_for_completion, 0);
+  rb_define_method(cRing, "process_completions", IOU_process_completions, -1);
 
   cArgumentError = rb_const_get(rb_cObject, rb_intern("ArgumentError"));
 
+  SYM_block   = MAKE_SYM("block");
   SYM_buffer  = MAKE_SYM("buffer");
   SYM_fd      = MAKE_SYM("fd");
   SYM_id      = MAKE_SYM("id");
