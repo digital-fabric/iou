@@ -64,7 +64,6 @@ $defs << '-DHAVE_IO_URING_PREP_RECVMSG_MULTISHOT' if config[:multishot_recvmsg]
 $defs << '-DHAVE_IO_URING_TIMEOUT_MULTISHOT'      if config[:multishot_timeout]
 $defs << '-DHAVE_IORING_SETUP_SUBMIT_ALL'         if config[:submit_all_flag]
 $defs << '-DHAVE_IORING_SETUP_COOP_TASKRUN'       if config[:coop_taskrun_flag]
-$defs << '-DHAVE_IORING_SETUP_SINGLE_ISSUER'      if config[:single_issuer_flag]
 $CFLAGS << ' -Wno-pointer-arith'
 
 CONFIG['optflags'] << ' -fno-strict-aliasing'

@@ -189,6 +189,37 @@ class PrepNopTest < IOURingBaseTest
     assert_nil c[:op]
     assert_equal 0, c[:result]
   end
+
+  def test_nop_as_signal
+    s1 = Queue.new
+    s2 = Queue.new
+    s3 = Queue.new
+    s4 = Queue.new
+
+    signaller = Thread.new do
+      s1.pop
+      id = ring.prep_nop
+      ring.submit
+      s2 << id
+    end
+
+    waiter = Thread.new do
+      s3.pop
+      s4 << ring.wait_for_completion
+    end
+
+    s3 << 'go'
+    s1 << 'go'
+    id = s2.pop
+    c = s4.pop
+
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_nil c[:op]
+    assert_equal 0, c[:result]    
+  ensure
+    signaller.kill rescue nil
+  end
 end
 
 class ProcessCompletionsTest < IOURingBaseTest

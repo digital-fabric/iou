@@ -65,16 +65,12 @@ VALUE IOU_initialize(VALUE self) {
   #ifdef HAVE_IORING_SETUP_COOP_TASKRUN
   flags |= IORING_SETUP_COOP_TASKRUN;
   #endif
-  #ifdef HAVE_IORING_SETUP_SINGLE_ISSUER
-  flags |= IORING_SETUP_SINGLE_ISSUER;
-  #endif
 
   while (1) {
     int ret = io_uring_queue_init(prepared_limit, &iou->ring, flags);
-
     if (likely(!ret)) break;
 
-    // if ENOMEM is returned, use a smaller limit
+    // if ENOMEM is returned, try with half as much entries
     if (unlikely(ret == -ENOMEM && prepared_limit > 64))
       prepared_limit = prepared_limit / 2;
     else
@@ -239,7 +235,9 @@ VALUE IOU_submit(VALUE self) {
   IOU_t *iou = get_iou(self);
   iou->unsubmitted_sqes = 0;
 
-  io_uring_submit(&iou->ring);
+  int ret = io_uring_submit(&iou->ring);
+  if (ret < 0)
+    rb_syserr_fail(-ret, strerror(-ret));
   return self;
 }
 
@@ -272,6 +270,7 @@ static inline VALUE pull_cqe_op_spec(IOU_t *iou, struct io_uring_cqe *cqe) {
 
   rb_hash_delete(iou->pending_ops, id);
   rb_hash_aset(op, SYM_result, result);
+  RB_GC_GUARD(op);
   return op;
 }
 
@@ -289,18 +288,6 @@ VALUE IOU_wait_for_completion(VALUE self) {
   }
   io_uring_cqe_seen(&iou->ring, ctx.cqe);
   return pull_cqe_op_spec(iou, ctx.cqe);
-
-  // VALUE id = UINT2NUM(ctx.cqe->user_data);
-  // VALUE op = rb_hash_aref(iou->pending_ops, id);
-  // VALUE result = INT2NUM(ctx.cqe->res);
-  // if (NIL_P(op))
-  //   return make_empty_op_with_result(id, result);
-  // else
-  //   rb_hash_delete(iou->pending_ops, id);
-
-  // rb_hash_aset(op, SYM_result, result);
-  // RB_GC_GUARD(op);
-  // return op;
 }
 
 static inline void process_cqe(IOU_t *iou, struct io_uring_cqe *cqe) {
