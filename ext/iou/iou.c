@@ -12,6 +12,7 @@ VALUE SYM_id;
 VALUE SYM_len;
 VALUE SYM_op;
 VALUE SYM_interval;
+VALUE SYM_read;
 VALUE SYM_result;
 VALUE SYM_timeout;
 VALUE SYM_ts;
@@ -186,6 +187,36 @@ inline void annotate_spec(VALUE spec, VALUE id, VALUE op) {
     rb_hash_aset(spec, SYM_block, rb_block_proc());
 }
 
+VALUE IOU_prep_read(VALUE self, VALUE spec) {
+  IOU_t *iou = get_iou(self);
+  unsigned id_i = ++iou->op_counter;
+  VALUE id = UINT2NUM(id_i);
+  iou->unsubmitted_sqes++;
+
+  VALUE values[3];
+  get_required_kwargs(spec, values, 3, SYM_fd, SYM_buffer, SYM_len);
+
+  VALUE fd = values[0];
+  VALUE buffer = values[1];
+  VALUE len = values[2];
+  unsigned nbytes = NUM2UINT(len);
+
+  struct io_uring_sqe *sqe = get_sqe(iou);
+  sqe->user_data = id_i;
+
+  annotate_spec(spec, id, SYM_read);
+  rb_hash_aset(iou->pending_ops, id, spec);
+
+  // prepare buffer
+  rb_str_modify(buffer);
+  unsigned current_len = RSTRING_LEN(buffer);  
+  if (current_len < nbytes)
+    rb_str_resize(buffer, nbytes);
+
+  io_uring_prep_read(sqe, NUM2INT(fd), RSTRING_PTR(buffer), nbytes, -1);
+  return id;
+}
+
 VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
   IOU_t *iou = get_iou(self);
   unsigned id_i = ++iou->op_counter;
@@ -227,7 +258,7 @@ VALUE IOU_prep_write(VALUE self, VALUE spec) {
   annotate_spec(spec, id, SYM_write);
   rb_hash_aset(iou->pending_ops, id, spec);
 
-  io_uring_prep_write(sqe, NUM2INT(fd), RSTRING_PTR(buffer), nbytes, 0);
+  io_uring_prep_write(sqe, NUM2INT(fd), RSTRING_PTR(buffer), nbytes, -1);
   return id;
 }
 
@@ -263,15 +294,23 @@ void *wait_for_completion_without_gvl(void *ptr) {
 
 static inline VALUE pull_cqe_op_spec(IOU_t *iou, struct io_uring_cqe *cqe) {
   VALUE id = UINT2NUM(cqe->user_data);
-  VALUE op = rb_hash_aref(iou->pending_ops, id);
+  VALUE spec = rb_hash_aref(iou->pending_ops, id);
   VALUE result = INT2NUM(cqe->res);
-  if (NIL_P(op))
+  if (NIL_P(spec))
     return make_empty_op_with_result(id, result);
 
+  // handle read buffer
+  VALUE op = rb_hash_aref(spec, SYM_op);
+  if (op == SYM_read) {
+    VALUE buffer = rb_hash_aref(spec, SYM_buffer);
+    rb_str_modify(buffer);
+    rb_str_set_len(buffer, (cqe->res > 0) ? cqe->res : 0);
+  }
+  
   rb_hash_delete(iou->pending_ops, id);
-  rb_hash_aset(op, SYM_result, result);
-  RB_GC_GUARD(op);
-  return op;
+  rb_hash_aset(spec, SYM_result, result);
+  RB_GC_GUARD(spec);
+  return spec;
 }
 
 VALUE IOU_wait_for_completion(VALUE self) {
@@ -293,7 +332,7 @@ VALUE IOU_wait_for_completion(VALUE self) {
 static inline void process_cqe(IOU_t *iou, struct io_uring_cqe *cqe) {
   VALUE spec = pull_cqe_op_spec(iou, cqe);
   VALUE block = rb_hash_aref(spec, SYM_block);
-  
+
   if (rb_block_given_p())
     rb_yield(spec);
   else if (RTEST(block))
@@ -376,6 +415,7 @@ void Init_IOU(void) {
   
   rb_define_method(cRing, "prep_cancel", IOU_prep_cancel, 1);
   rb_define_method(cRing, "prep_nop", IOU_prep_nop, 0);
+  rb_define_method(cRing, "prep_read", IOU_prep_read, 1);
   rb_define_method(cRing, "prep_timeout", IOU_prep_timeout, 1);
   rb_define_method(cRing, "prep_write", IOU_prep_write, 1);
 
@@ -385,15 +425,16 @@ void Init_IOU(void) {
 
   cArgumentError = rb_const_get(rb_cObject, rb_intern("ArgumentError"));
 
-  SYM_block   = MAKE_SYM("block");
-  SYM_buffer  = MAKE_SYM("buffer");
-  SYM_fd      = MAKE_SYM("fd");
-  SYM_id      = MAKE_SYM("id");
-  SYM_len     = MAKE_SYM("len");
-  SYM_op      = MAKE_SYM("op");
+  SYM_block     = MAKE_SYM("block");
+  SYM_buffer    = MAKE_SYM("buffer");
+  SYM_fd        = MAKE_SYM("fd");
+  SYM_id        = MAKE_SYM("id");
+  SYM_len       = MAKE_SYM("len");
+  SYM_op        = MAKE_SYM("op");
   SYM_interval  = MAKE_SYM("interval");
-  SYM_result  = MAKE_SYM("result");
-  SYM_timeout = MAKE_SYM("timeout");
-  SYM_ts      = MAKE_SYM("ts");
-  SYM_write   = MAKE_SYM("write");
+  SYM_read      = MAKE_SYM("read");
+  SYM_result    = MAKE_SYM("result");
+  SYM_timeout   = MAKE_SYM("timeout");
+  SYM_ts        = MAKE_SYM("ts");
+  SYM_write     = MAKE_SYM("write");
 }

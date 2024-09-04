@@ -309,3 +309,67 @@ class ProcessCompletionsTest < IOURingBaseTest
     assert_equal [1, 2], cc
   end
 end
+
+class PrepReadTest < IOURingBaseTest
+  def test_prep_read
+    r, w = IO.pipe
+    s = 'foobar'
+
+    id = ring.prep_read(fd: r.fileno, buffer: +'', len: 8192)
+    assert_equal 1, id
+    ring.submit
+
+    w << s
+
+    c = ring.wait_for_completion
+
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :read, c[:op]
+    assert_equal r.fileno, c[:fd]
+    assert_equal s.bytesize, c[:result]
+    assert_equal s, c[:buffer]
+  end
+
+  def test_prep_read_empty
+    r, w = IO.pipe
+
+    id = ring.prep_read(fd: r.fileno, buffer: +'', len: 8192)
+    assert_equal 1, id
+    ring.submit
+
+    w.close
+
+    c = ring.wait_for_completion
+
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :read, c[:op]
+    assert_equal r.fileno, c[:fd]
+    assert_equal 0, c[:result]
+    assert_equal '', c[:buffer]
+  end
+
+  def test_prep_read_invalid_args
+    assert_raises(ArgumentError) { ring.prep_read() }
+    assert_raises(ArgumentError) { ring.prep_read(foo: 1) }
+    assert_raises(ArgumentError) { ring.prep_read(fd: 'bar', buffer: +'') }
+    assert_raises(ArgumentError) { ring.prep_read({}) }
+  end
+
+  def test_prep_read_invalid_fd
+    r, w = IO.pipe
+
+    id = ring.prep_read(fd: w.fileno, buffer: +'', len: 8192)
+    assert_equal 1, id
+
+    ring.submit
+    c = ring.wait_for_completion
+
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :read, c[:op]
+    assert_equal w.fileno, c[:fd]
+    assert_equal -Errno::EBADF::Errno, c[:result]
+  end
+end
