@@ -12,6 +12,7 @@ VALUE SYM_close;
 VALUE SYM_fd;
 VALUE SYM_id;
 VALUE SYM_len;
+VALUE SYM_multishot;
 VALUE SYM_op;
 VALUE SYM_interval;
 VALUE SYM_read;
@@ -263,15 +264,18 @@ VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
 
   VALUE values[1];
   get_required_kwargs(spec, values, 1, SYM_interval);
+  VALUE interval = values[0];
+  VALUE multishot = rb_hash_aref(spec, SYM_multishot);
+  unsigned flags = RTEST(multishot) ? IORING_TIMEOUT_MULTISHOT : 0;
 
-  VALUE time_spec = rb_funcall(cTimeSpec, rb_intern("new"), 1, values[0]);
+  VALUE time_spec = rb_funcall(cTimeSpec, rb_intern("new"), 1, interval);
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
 
   rb_hash_aset(spec, SYM_ts, time_spec);
   store_spec(iou, spec, id, SYM_timeout);
 
-  io_uring_prep_timeout(sqe, TimeSpec_ts_ptr(time_spec), 0, 0);
+  io_uring_prep_timeout(sqe, TimeSpec_ts_ptr(time_spec), 0, flags);
   iou->unsubmitted_sqes++;
   return id;
 }
@@ -283,7 +287,6 @@ VALUE IOU_prep_write(VALUE self, VALUE spec) {
 
   VALUE values[2];
   get_required_kwargs(spec, values, 2, SYM_fd, SYM_buffer);
-
   VALUE fd = values[0];
   VALUE buffer = values[1];
   VALUE len = rb_hash_aref(spec, SYM_len);
@@ -348,7 +351,9 @@ static inline VALUE pull_cqe_op_spec(IOU_t *iou, struct io_uring_cqe *cqe) {
     adjust_read_buffer_len(buffer, cqe->res, buffer_offset_i);
   }
   
-  rb_hash_delete(iou->pending_ops, id);
+  if (!(cqe->flags & IORING_CQE_F_MORE))
+    rb_hash_delete(iou->pending_ops, id);
+
   rb_hash_aset(spec, SYM_result, result);
   RB_GC_GUARD(spec);
   return spec;
@@ -474,6 +479,7 @@ void Init_IOU(void) {
   SYM_fd            = MAKE_SYM("fd");
   SYM_id            = MAKE_SYM("id");
   SYM_len           = MAKE_SYM("len");
+  SYM_multishot     = MAKE_SYM("multishot");
   SYM_op            = MAKE_SYM("op");
   SYM_interval      = MAKE_SYM("interval");
   SYM_read          = MAKE_SYM("read");

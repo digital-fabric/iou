@@ -110,6 +110,48 @@ class PrepCancelTest < IOURingBaseTest
   end
 end
 
+class PrepareTimeoutMultishotTest < IOURingBaseTest
+  def test_prep_timeout_multishot
+    interval = 0.03
+    count = 0
+    cancelled = false
+
+    t0 = monotonic_clock
+    id = ring.prep_timeout(interval: interval, multishot: true) do |c|
+      case c[:result]
+      when -Errno::ETIME::Errno
+        count += 1
+      when -Errno::ECANCELED::Errno
+        cancelled = true
+      end
+    end
+    ring.submit
+
+    ring.process_completions(true)
+    elapsed = monotonic_clock - t0
+    assert_in_range interval..(interval + 0.02), elapsed
+    assert_equal 1, count
+
+    t0 = monotonic_clock
+    ring.process_completions(true)
+    elapsed = monotonic_clock - t0
+    assert_in_range (interval - 0.01)..(interval + 0.02), elapsed
+    assert_equal 2, count
+
+    t0 = monotonic_clock
+    ring.process_completions(true)
+    elapsed = monotonic_clock - t0
+    assert_in_range (interval - 0.01)..(interval + 0.02), elapsed
+    assert_equal 3, count
+
+    ring.prep_cancel(id)
+    ring.submit
+    c = ring.process_completions(true)
+    assert_equal true, cancelled
+    assert_equal 3, count
+  end
+end
+
 class PrepWriteTest < IOURingBaseTest
   def test_prep_write
     r, w = IO.pipe
