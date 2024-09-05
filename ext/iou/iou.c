@@ -7,6 +7,7 @@ VALUE cArgumentError;
 
 VALUE SYM_block;
 VALUE SYM_buffer;
+VALUE SYM_buffer_offset;
 VALUE SYM_fd;
 VALUE SYM_id;
 VALUE SYM_len;
@@ -187,6 +188,26 @@ inline void annotate_spec(VALUE spec, VALUE id, VALUE op) {
     rb_hash_aset(spec, SYM_block, rb_block_proc());
 }
 
+static inline void * prepare_read_buffer(VALUE buffer, unsigned len, int ofs) {
+  unsigned current_len = RSTRING_LEN(buffer);
+  if (ofs < 0) ofs = current_len + ofs + 1;
+  unsigned new_len = len + (unsigned)ofs;
+
+  if (current_len < new_len)
+    rb_str_modify_expand(buffer, new_len);
+  else
+    rb_str_modify(buffer);
+  return RSTRING_PTR(buffer) + ofs;
+}
+
+static inline void adjust_read_buffer_len(VALUE buffer, int result, int ofs) {
+  rb_str_modify(buffer);
+  unsigned len = result > 0 ? (unsigned)result : 0;
+  unsigned current_len = RSTRING_LEN(buffer);
+  if (ofs < 0) ofs = current_len + ofs + 1;
+  rb_str_set_len(buffer, len + (unsigned)ofs);
+}
+
 VALUE IOU_prep_read(VALUE self, VALUE spec) {
   IOU_t *iou = get_iou(self);
   unsigned id_i = ++iou->op_counter;
@@ -199,7 +220,10 @@ VALUE IOU_prep_read(VALUE self, VALUE spec) {
   VALUE fd = values[0];
   VALUE buffer = values[1];
   VALUE len = values[2];
-  unsigned nbytes = NUM2UINT(len);
+  unsigned len_i = NUM2UINT(len);
+
+  VALUE buffer_offset = rb_hash_aref(spec, SYM_buffer_offset);
+  int buffer_offset_i = NIL_P(buffer_offset) ? 0 : NUM2INT(buffer_offset);
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
@@ -207,13 +231,8 @@ VALUE IOU_prep_read(VALUE self, VALUE spec) {
   annotate_spec(spec, id, SYM_read);
   rb_hash_aset(iou->pending_ops, id, spec);
 
-  // prepare buffer
-  rb_str_modify(buffer);
-  unsigned current_len = RSTRING_LEN(buffer);  
-  if (current_len < nbytes)
-    rb_str_resize(buffer, nbytes);
-
-  io_uring_prep_read(sqe, NUM2INT(fd), RSTRING_PTR(buffer), nbytes, -1);
+  void *ptr = prepare_read_buffer(buffer, len_i, buffer_offset_i);
+  io_uring_prep_read(sqe, NUM2INT(fd), ptr, len_i, -1);
   return id;
 }
 
@@ -303,8 +322,9 @@ static inline VALUE pull_cqe_op_spec(IOU_t *iou, struct io_uring_cqe *cqe) {
   VALUE op = rb_hash_aref(spec, SYM_op);
   if (op == SYM_read) {
     VALUE buffer = rb_hash_aref(spec, SYM_buffer);
-    rb_str_modify(buffer);
-    rb_str_set_len(buffer, (cqe->res > 0) ? cqe->res : 0);
+    VALUE buffer_offset = rb_hash_aref(spec, SYM_buffer_offset);
+    int buffer_offset_i = NIL_P(buffer_offset) ? 0 : NUM2INT(buffer_offset);
+    adjust_read_buffer_len(buffer, cqe->res, buffer_offset_i);
   }
   
   rb_hash_delete(iou->pending_ops, id);
@@ -425,16 +445,17 @@ void Init_IOU(void) {
 
   cArgumentError = rb_const_get(rb_cObject, rb_intern("ArgumentError"));
 
-  SYM_block     = MAKE_SYM("block");
-  SYM_buffer    = MAKE_SYM("buffer");
-  SYM_fd        = MAKE_SYM("fd");
-  SYM_id        = MAKE_SYM("id");
-  SYM_len       = MAKE_SYM("len");
-  SYM_op        = MAKE_SYM("op");
-  SYM_interval  = MAKE_SYM("interval");
-  SYM_read      = MAKE_SYM("read");
-  SYM_result    = MAKE_SYM("result");
-  SYM_timeout   = MAKE_SYM("timeout");
-  SYM_ts        = MAKE_SYM("ts");
-  SYM_write     = MAKE_SYM("write");
+  SYM_block         = MAKE_SYM("block");
+  SYM_buffer        = MAKE_SYM("buffer");
+  SYM_buffer_offset = MAKE_SYM("buffer_offset");
+  SYM_fd            = MAKE_SYM("fd");
+  SYM_id            = MAKE_SYM("id");
+  SYM_len           = MAKE_SYM("len");
+  SYM_op            = MAKE_SYM("op");
+  SYM_interval      = MAKE_SYM("interval");
+  SYM_read          = MAKE_SYM("read");
+  SYM_result        = MAKE_SYM("result");
+  SYM_timeout       = MAKE_SYM("timeout");
+  SYM_ts            = MAKE_SYM("ts");
+  SYM_write         = MAKE_SYM("write");
 }

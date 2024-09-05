@@ -372,4 +372,93 @@ class PrepReadTest < IOURingBaseTest
     assert_equal w.fileno, c[:fd]
     assert_equal -Errno::EBADF::Errno, c[:result]
   end
+
+  def test_prep_read_with_block
+    r, w = IO.pipe
+    w << 'foobar'
+
+    cc = nil
+    id = ring.prep_read(fd: r.fileno, buffer: +'', len: 3) do |c|
+      cc = c
+    end
+
+    ring.submit
+    ring.process_completions
+
+    assert_kind_of Hash, cc
+    assert_equal id, cc[:id]
+    assert_equal :read, cc[:op]
+    assert_equal r.fileno, cc[:fd]
+    assert_equal 3, cc[:result]
+    assert_equal 'foo', cc[:buffer]
+
+    id = ring.prep_read(fd: r.fileno, buffer: +'', len: 5) do |c|
+      cc = c
+    end
+    assert_equal 'foo', cc[:buffer]
+
+    ring.submit
+    ring.process_completions
+
+    assert_kind_of Hash, cc
+    assert_equal id, cc[:id]
+    assert_equal :read, cc[:op]
+    assert_equal r.fileno, cc[:fd]
+    assert_equal 3, cc[:result]
+    assert_equal 'bar', cc[:buffer]
+  end
+
+  def test_prep_read_with_buffer_offset
+    buffer = +'foo'
+
+    r, w = IO.pipe
+    w << 'bar'
+
+    id = ring.prep_read(fd: r.fileno, buffer: buffer, len: 100, buffer_offset: buffer.bytesize)
+    ring.submit
+    cc = ring.wait_for_completion
+
+    assert_kind_of Hash, cc
+    assert_equal id, cc[:id]
+    assert_equal :read, cc[:op]
+    assert_equal r.fileno, cc[:fd]
+    assert_equal 3, cc[:result]
+    assert_equal 'foobar', buffer
+  end
+
+  def test_prep_read_with_negative_buffer_offset
+    buffer = +'foo'
+
+    r, w = IO.pipe
+    w << 'bar'
+
+    id = ring.prep_read(fd: r.fileno, buffer: buffer, len: 100, buffer_offset: -1)
+    ring.submit
+    cc = ring.wait_for_completion
+
+    assert_kind_of Hash, cc
+    assert_equal id, cc[:id]
+    assert_equal :read, cc[:op]
+    assert_equal r.fileno, cc[:fd]
+    assert_equal 3, cc[:result]
+    assert_equal 'foobar', buffer
+
+
+
+    buffer = +'foogrr'
+
+    r, w = IO.pipe
+    w << 'bar'
+
+    id = ring.prep_read(fd: r.fileno, buffer: buffer, len: 100, buffer_offset: -4)
+    ring.submit
+    cc = ring.wait_for_completion
+
+    assert_kind_of Hash, cc
+    assert_equal id, cc[:id]
+    assert_equal :read, cc[:op]
+    assert_equal r.fileno, cc[:fd]
+    assert_equal 3, cc[:result]
+    assert_equal 'foobar', buffer
+  end
 end
