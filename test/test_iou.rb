@@ -462,3 +462,56 @@ class PrepReadTest < IOURingBaseTest
     assert_equal 'foobar', buffer
   end
 end
+
+class PrepCloseTest < IOURingBaseTest
+  def test_prep_close
+    r, w = IO.pipe
+    fd = w.fileno
+
+    id = ring.prep_close(fd: fd)
+    assert_equal 1, id
+    ring.submit
+
+    c = ring.wait_for_completion
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :close, c[:op]
+    assert_equal fd, c[:fd]
+    assert_equal 0, c[:result]
+
+    assert_raises(Errno::EBADF) { w << 'fail' }
+
+    id = ring.prep_close(fd: fd)
+    assert_equal 2, id
+    ring.submit
+
+    c = ring.wait_for_completion
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :close, c[:op]
+    assert_equal fd, c[:fd]
+    assert_equal -Errno::EBADF::Errno, c[:result]
+
+  end
+
+  def test_prep_close_invalid_args
+    assert_raises(ArgumentError) { ring.prep_close() }
+    assert_raises(ArgumentError) { ring.prep_close({}) }
+    assert_raises(ArgumentError) { ring.prep_close(foo: 1) }
+    assert_raises(TypeError) { ring.prep_close(fd: 'bar') }
+  end
+
+  def test_prep_close_invalid_fd
+    id = ring.prep_close(fd: 9999)
+    assert_equal 1, id
+
+    ring.submit
+    c = ring.wait_for_completion
+
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :close, c[:op]
+    assert_equal 9999, c[:fd]
+    assert_equal -Errno::EBADF::Errno, c[:result]
+  end
+end

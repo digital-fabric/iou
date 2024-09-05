@@ -8,6 +8,7 @@ VALUE cArgumentError;
 VALUE SYM_block;
 VALUE SYM_buffer;
 VALUE SYM_buffer_offset;
+VALUE SYM_close;
 VALUE SYM_fd;
 VALUE SYM_id;
 VALUE SYM_len;
@@ -140,6 +141,14 @@ static inline void get_required_kwargs(VALUE spec, VALUE *values, int argc, ...)
   va_end(ptr);
 }
 
+inline void store_spec(IOU_t *iou, VALUE spec, VALUE id, VALUE op) {
+  rb_hash_aset(spec, SYM_id, id);
+  rb_hash_aset(spec, SYM_op, op);
+  if (rb_block_given_p())
+    rb_hash_aset(spec, SYM_block, rb_block_proc());
+  rb_hash_aset(iou->pending_ops, id, spec);
+}
+
 VALUE prep_cancel_id(IOU_t *iou, unsigned op_id_i) {
   unsigned id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
@@ -168,6 +177,25 @@ VALUE IOU_prep_cancel(VALUE self, VALUE spec) {
   rb_raise(cArgumentError, "Missing operation id");
 }
 
+VALUE IOU_prep_close(VALUE self, VALUE spec) {
+  IOU_t *iou = get_iou(self);
+  unsigned id_i = ++iou->op_counter;
+  VALUE id = UINT2NUM(id_i);
+
+  VALUE values[1];
+  get_required_kwargs(spec, values, 1, SYM_fd);
+  VALUE fd = values[0];
+
+  struct io_uring_sqe *sqe = get_sqe(iou);
+  sqe->user_data = id_i;
+
+  store_spec(iou, spec, id, SYM_close);
+
+  io_uring_prep_close(sqe, NUM2INT(fd));
+  iou->unsubmitted_sqes++;
+  return id;
+}
+
 VALUE IOU_prep_nop(VALUE self) {
   IOU_t *iou = get_iou(self);
   unsigned id_i = ++iou->op_counter;
@@ -179,14 +207,6 @@ VALUE IOU_prep_nop(VALUE self) {
   iou->unsubmitted_sqes++;
 
   return id;
-}
-
-inline void store_spec(IOU_t *iou, VALUE spec, VALUE id, VALUE op) {
-  rb_hash_aset(spec, SYM_id, id);
-  rb_hash_aset(spec, SYM_op, op);
-  if (rb_block_given_p())
-    rb_hash_aset(spec, SYM_block, rb_block_proc());
-  rb_hash_aset(iou->pending_ops, id, spec);
 }
 
 static inline void * prepare_read_buffer(VALUE buffer, unsigned len, int ofs) {
@@ -213,7 +233,6 @@ VALUE IOU_prep_read(VALUE self, VALUE spec) {
   IOU_t *iou = get_iou(self);
   unsigned id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
-  iou->unsubmitted_sqes++;
 
   VALUE values[3];
   get_required_kwargs(spec, values, 3, SYM_fd, SYM_buffer, SYM_len);
@@ -233,6 +252,7 @@ VALUE IOU_prep_read(VALUE self, VALUE spec) {
 
   void *ptr = prepare_read_buffer(buffer, len_i, buffer_offset_i);
   io_uring_prep_read(sqe, NUM2INT(fd), ptr, len_i, -1);
+  iou->unsubmitted_sqes++;
   return id;
 }
 
@@ -240,7 +260,6 @@ VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
   IOU_t *iou = get_iou(self);
   unsigned id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
-  iou->unsubmitted_sqes++;
 
   VALUE values[1];
   get_required_kwargs(spec, values, 1, SYM_interval);
@@ -253,6 +272,7 @@ VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
   store_spec(iou, spec, id, SYM_timeout);
 
   io_uring_prep_timeout(sqe, TimeSpec_ts_ptr(time_spec), 0, 0);
+  iou->unsubmitted_sqes++;
   return id;
 }
 
@@ -260,7 +280,6 @@ VALUE IOU_prep_write(VALUE self, VALUE spec) {
   IOU_t *iou = get_iou(self);
   unsigned id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
-  iou->unsubmitted_sqes++;
 
   VALUE values[2];
   get_required_kwargs(spec, values, 2, SYM_fd, SYM_buffer);
@@ -276,16 +295,20 @@ VALUE IOU_prep_write(VALUE self, VALUE spec) {
   store_spec(iou, spec, id, SYM_write);
 
   io_uring_prep_write(sqe, NUM2INT(fd), RSTRING_PTR(buffer), nbytes, -1);
+  iou->unsubmitted_sqes++;
   return id;
 }
 
 VALUE IOU_submit(VALUE self) {
   IOU_t *iou = get_iou(self);
-  iou->unsubmitted_sqes = 0;
+  if (!iou->unsubmitted_sqes) goto done;
 
+  iou->unsubmitted_sqes = 0;
   int ret = io_uring_submit(&iou->ring);
   if (ret < 0)
     rb_syserr_fail(-ret, strerror(-ret));
+
+done:
   return self;
 }
 
@@ -432,6 +455,7 @@ void Init_IOU(void) {
   rb_define_method(cRing, "closed?", IOU_closed_p, 0);
   
   rb_define_method(cRing, "prep_cancel", IOU_prep_cancel, 1);
+  rb_define_method(cRing, "prep_close", IOU_prep_close, 1);
   rb_define_method(cRing, "prep_nop", IOU_prep_nop, 0);
   rb_define_method(cRing, "prep_read", IOU_prep_read, 1);
   rb_define_method(cRing, "prep_timeout", IOU_prep_timeout, 1);
@@ -446,6 +470,7 @@ void Init_IOU(void) {
   SYM_block         = MAKE_SYM("block");
   SYM_buffer        = MAKE_SYM("buffer");
   SYM_buffer_offset = MAKE_SYM("buffer_offset");
+  SYM_close         = MAKE_SYM("close");
   SYM_fd            = MAKE_SYM("fd");
   SYM_id            = MAKE_SYM("id");
   SYM_len           = MAKE_SYM("len");
