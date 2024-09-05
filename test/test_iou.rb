@@ -2,18 +2,6 @@
 
 require_relative 'helper'
 
-class IOURingBaseTest < Minitest::Test
-  attr_accessor :ring
-  
-  def setup
-    @ring = IOU::Ring.new
-  end
-
-  def teardown
-    ring.close
-  end
-end
-
 class IOURingTest < IOURingBaseTest
   def test_close
     ring2 = IOU::Ring.new
@@ -21,6 +9,22 @@ class IOURingTest < IOURingBaseTest
 
     ring2.close
     assert ring2.closed?
+  end
+
+  def test_pending_ops
+    assert_equal({}, ring.pending_ops)
+
+    id = ring.prep_timeout(interval: 1)
+    spec = ring.pending_ops[id]
+    assert_equal id, spec[:id]
+    assert_equal :timeout, spec[:op]
+    assert_equal 1, spec[:interval]
+
+    ring.prep_cancel(id)
+    ring.submit
+    ring.process_completions(true)
+
+    assert_nil ring.pending_ops[id]
   end
 end
 
@@ -149,6 +153,7 @@ class PrepareTimeoutMultishotTest < IOURingBaseTest
     c = ring.process_completions(true)
     assert_equal true, cancelled
     assert_equal 3, count
+    assert_nil ring.pending_ops[id]
   end
 end
 
@@ -557,3 +562,8 @@ class PrepCloseTest < IOURingBaseTest
     assert_equal -Errno::EBADF::Errno, c[:result]
   end
 end
+
+# class PrepAcceptTest < IOURingBaseTest
+#   def setup
+#   end
+# end

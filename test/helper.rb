@@ -45,3 +45,15 @@ module Minitest::Assertions
     assert exp_range.include?(act), msg
   end
 end
+
+class IOURingBaseTest < Minitest::Test
+  attr_accessor :ring
+  
+  def setup
+    @ring = IOU::Ring.new
+  end
+
+  def teardown
+    ring.close
+  end
+end

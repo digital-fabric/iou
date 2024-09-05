@@ -100,6 +100,11 @@ VALUE IOU_closed_p(VALUE self) {
   return iou->ring_initialized ? Qfalse : Qtrue;
 }
 
+VALUE IOU_pending_ops(VALUE self) {
+  IOU_t *iou = RTYPEDDATA_DATA(self);
+  return iou->pending_ops;
+}
+
 inline IOU_t *get_iou(VALUE self) {
   IOU_t *iou = RTYPEDDATA_DATA(self);
   if (!iou->ring_initialized)
@@ -458,6 +463,7 @@ void Init_IOU(void) {
   rb_define_method(cRing, "initialize", IOU_initialize, 0);
   rb_define_method(cRing, "close", IOU_close, 0);
   rb_define_method(cRing, "closed?", IOU_closed_p, 0);
+  rb_define_method(cRing, "pending_ops", IOU_pending_ops, 0);
   
   rb_define_method(cRing, "prep_cancel", IOU_prep_cancel, 1);
   rb_define_method(cRing, "prep_close", IOU_prep_close, 1);
