@@ -181,11 +181,12 @@ VALUE IOU_prep_nop(VALUE self) {
   return id;
 }
 
-inline void annotate_spec(VALUE spec, VALUE id, VALUE op) {
+inline void store_spec(IOU_t *iou, VALUE spec, VALUE id, VALUE op) {
   rb_hash_aset(spec, SYM_id, id);
   rb_hash_aset(spec, SYM_op, op);
   if (rb_block_given_p())
     rb_hash_aset(spec, SYM_block, rb_block_proc());
+  rb_hash_aset(iou->pending_ops, id, spec);
 }
 
 static inline void * prepare_read_buffer(VALUE buffer, unsigned len, int ofs) {
@@ -228,8 +229,7 @@ VALUE IOU_prep_read(VALUE self, VALUE spec) {
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
 
-  annotate_spec(spec, id, SYM_read);
-  rb_hash_aset(iou->pending_ops, id, spec);
+  store_spec(iou, spec, id, SYM_read);
 
   void *ptr = prepare_read_buffer(buffer, len_i, buffer_offset_i);
   io_uring_prep_read(sqe, NUM2INT(fd), ptr, len_i, -1);
@@ -249,9 +249,8 @@ VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
 
-  annotate_spec(spec, id, SYM_timeout);
   rb_hash_aset(spec, SYM_ts, time_spec);
-  rb_hash_aset(iou->pending_ops, id, spec);
+  store_spec(iou, spec, id, SYM_timeout);
 
   io_uring_prep_timeout(sqe, TimeSpec_ts_ptr(time_spec), 0, 0);
   return id;
@@ -274,8 +273,7 @@ VALUE IOU_prep_write(VALUE self, VALUE spec) {
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
 
-  annotate_spec(spec, id, SYM_write);
-  rb_hash_aset(iou->pending_ops, id, spec);
+  store_spec(iou, spec, id, SYM_write);
 
   io_uring_prep_write(sqe, NUM2INT(fd), RSTRING_PTR(buffer), nbytes, -1);
   return id;
