@@ -176,8 +176,7 @@ VALUE IOU_prep_accept(VALUE self, VALUE spec) {
   VALUE values[1];
   get_required_kwargs(spec, values, 1, SYM_fd);
   VALUE fd = values[0];
-  // VALUE multishot = rb_hash_aref(spec, SYM_multishot);
-  // unsigned flags = RTEST(multishot) ? IORING_TIMEOUT_MULTISHOT : 0;
+  VALUE multishot = rb_hash_aref(spec, SYM_multishot);
 
   VALUE spec_data = rb_funcall(cOpSpecData, rb_intern("new"), 0);
   struct io_uring_sqe *sqe = get_sqe(iou);
@@ -186,8 +185,10 @@ VALUE IOU_prep_accept(VALUE self, VALUE spec) {
   store_spec(iou, spec, id, SYM_accept);
 
   struct sa_data *sa = OpSpecData_sa_get(spec_data);
-  io_uring_prep_accept(sqe, NUM2INT(fd), &sa->addr, &sa->len, 0);
-  // io_uring_prep_timeout(sqe, OpSpecData_ts(time_spec), 0, flags);
+  if (RTEST(multishot))
+    io_uring_prep_multishot_accept(sqe, NUM2INT(fd), &sa->addr, &sa->len, 0);
+  else
+    io_uring_prep_accept(sqe, NUM2INT(fd), &sa->addr, &sa->len, 0);
   iou->unsubmitted_sqes++;
   return id;
 }

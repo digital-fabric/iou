@@ -614,4 +614,32 @@ class PrepAcceptTest < IOURingBaseTest
     assert_equal -Errno::ENOTSOCK::Errno, c[:result]
   end
 
+  def test_prep_accept_multishot
+    id = ring.prep_accept(fd: @server.fileno, multishot: true)
+    ring.submit
+
+    tt = []
+
+    connect = -> {
+      tt << Thread.new do
+        client = TCPSocket.new('127.0.0.1', @port)
+      end
+    }
+
+    fds = []
+
+    3.times do
+      connect.call
+      c = ring.wait_for_completion
+      assert_equal id, c[:id]
+      assert_equal :accept, c[:op]
+      fd = c[:result]
+      assert fd > 0
+      fds << fd
+    end
+
+    assert_equal 3, fds.uniq.size
+  ensure
+    tt.each { |t| t&.kill rescue nil }
+  end
 end
