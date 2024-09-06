@@ -364,22 +364,27 @@ void *wait_for_completion_without_gvl(void *ptr) {
   return NULL;
 }
 
-static inline VALUE pull_cqe_op_spec(IOU_t *iou, struct io_uring_cqe *cqe) {
+static inline void update_read_buffer(VALUE spec, struct io_uring_cqe *cqe) {
+  VALUE buffer = rb_hash_aref(spec, SYM_buffer);
+  VALUE buffer_offset = rb_hash_aref(spec, SYM_buffer_offset);
+  int buffer_offset_i = NIL_P(buffer_offset) ? 0 : NUM2INT(buffer_offset);
+  adjust_read_buffer_len(buffer, cqe->res, buffer_offset_i);
+}
+
+static inline VALUE get_cqe_op_spec(IOU_t *iou, struct io_uring_cqe *cqe) {
   VALUE id = UINT2NUM(cqe->user_data);
   VALUE spec = rb_hash_aref(iou->pending_ops, id);
   VALUE result = INT2NUM(cqe->res);
   if (NIL_P(spec))
     return make_empty_op_with_result(id, result);
 
-  // handle read buffer
+  // post completion work
   VALUE op = rb_hash_aref(spec, SYM_op);
-  if (op == SYM_read) {
-    VALUE buffer = rb_hash_aref(spec, SYM_buffer);
-    VALUE buffer_offset = rb_hash_aref(spec, SYM_buffer_offset);
-    int buffer_offset_i = NIL_P(buffer_offset) ? 0 : NUM2INT(buffer_offset);
-    adjust_read_buffer_len(buffer, cqe->res, buffer_offset_i);
-  }
+  if (op == SYM_read)
+    update_read_buffer(spec, cqe);
   
+  // for multishot ops, the IORING_CQE_F_MORE flag indicates more completions
+  // will be coming, so we need to keep the spec. Otherwise, we remove it.
   if (!(cqe->flags & IORING_CQE_F_MORE))
     rb_hash_delete(iou->pending_ops, id);
 
@@ -401,17 +406,21 @@ VALUE IOU_wait_for_completion(VALUE self) {
     rb_syserr_fail(-ctx.ret, strerror(-ctx.ret));
   }
   io_uring_cqe_seen(&iou->ring, ctx.cqe);
-  return pull_cqe_op_spec(iou, ctx.cqe);
+  return get_cqe_op_spec(iou, ctx.cqe);
 }
 
 static inline void process_cqe(IOU_t *iou, struct io_uring_cqe *cqe) {
-  VALUE spec = pull_cqe_op_spec(iou, cqe);
-  VALUE block = rb_hash_aref(spec, SYM_block);
+  VALUE spec = get_cqe_op_spec(iou, cqe);
 
   if (rb_block_given_p())
     rb_yield(spec);
-  else if (RTEST(block))
-    rb_proc_call_with_block_kw(block, 1, &spec, Qnil, Qnil);
+  else {
+    VALUE block = rb_hash_aref(spec, SYM_block);
+    if (RTEST(block))
+      rb_proc_call_with_block_kw(block, 1, &spec, Qnil, Qnil);
+  }
+
+  RB_GC_GUARD(spec);
 }
 
 // copied from liburing/queue.c

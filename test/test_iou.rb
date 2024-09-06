@@ -628,17 +628,24 @@ class PrepAcceptTest < IOURingBaseTest
 
     fds = []
 
-    3.times do
+    3.times do |i|
       connect.call
       c = ring.wait_for_completion
       assert_equal id, c[:id]
       assert_equal :accept, c[:op]
       fd = c[:result]
       assert fd > 0
+      assert ring.pending_ops[id]
+
       fds << fd
     end
 
     assert_equal 3, fds.uniq.size
+
+    ring.prep_cancel(id)
+    ring.process_completions
+
+    assert_nil ring.pending_ops[id]
   ensure
     tt.each { |t| t&.kill rescue nil }
   end
