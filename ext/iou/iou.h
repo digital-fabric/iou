@@ -28,13 +28,15 @@ typedef struct IOU_t {
   VALUE           pending_ops;
 } IOU_t;
 
-typedef struct TimeSpec_t {
-  struct __kernel_timespec ts;
-} TimeSpec_t;
+typedef struct OpSpecData_t {
+  union {
+    struct __kernel_timespec ts;
+  } data;
+} OpSpecData_t;
 
 extern VALUE mIOU;
-extern VALUE cTimeSpec;
+extern VALUE cOpSpecData;
 
-struct __kernel_timespec *TimeSpec_ts_ptr(VALUE self);
+struct __kernel_timespec *OpSpecData_ts_ptr(VALUE self);
 
 #endif // IOU_H

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'helper'
+require 'socket'
 
 class IOURingTest < IOURingBaseTest
   def test_close
@@ -563,7 +564,32 @@ class PrepCloseTest < IOURingBaseTest
   end
 end
 
-# class PrepAcceptTest < IOURingBaseTest
-#   def setup
-#   end
-# end
+class PrepAcceptTest < IOURingBaseTest
+  def setup
+    super
+    @port = 9000 + rand(1000)
+    @server = TCPServer.open('127.0.0.1', @port)
+  end
+
+  def teardown
+    @server.close
+    super
+  end
+
+  # def test_prep_accept
+  #   id = ring.prep_accept(fd: @server.fileno)
+  #   ring.submit
+
+  #   t = Thread.new do
+  #     client = TCPSocket.new('127.0.0.1', @port)
+  #   end
+
+  #   c = ring.wait_for_completion
+  #   assert_equal id, c[:id]
+  #   assert_equal :accept, c[:accept]
+  #   fd = c[:result]
+  #   assert fd > 0
+  # ensure
+  #   t&.kill rescue nil
+  # end
+end

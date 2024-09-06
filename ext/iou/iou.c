@@ -5,6 +5,7 @@ VALUE mIOU;
 VALUE cRing;
 VALUE cArgumentError;
 
+VALUE SYM_accept;
 VALUE SYM_block;
 VALUE SYM_buffer;
 VALUE SYM_buffer_offset;
@@ -167,6 +168,28 @@ VALUE prep_cancel_id(IOU_t *iou, unsigned op_id_i) {
   return id;
 }
 
+VALUE IOU_prep_accept(VALUE self, VALUE spec) {
+  // IOU_t *iou = get_iou(self);
+  // unsigned id_i = ++iou->op_counter;
+  // VALUE id = UINT2NUM(id_i);
+
+  // VALUE values[1];
+  // get_required_kwargs(spec, values, 1, SYM_fd);
+  // VALUE fd = values[0];
+  // VALUE multishot = rb_hash_aref(spec, SYM_multishot);
+  // // unsigned flags = RTEST(multishot) ? IORING_TIMEOUT_MULTISHOT : 0;
+
+  // struct io_uring_sqe *sqe = get_sqe(iou);
+  // sqe->user_data = id_i;
+
+  // store_spec(iou, spec, id, SYM_accept);
+
+  // io_uring_prep_timeout(sqe, OpSpecData_ts_ptr(time_spec), 0, flags);
+  // iou->unsubmitted_sqes++;
+  // return id;
+  return self;
+}
+
 VALUE IOU_prep_cancel(VALUE self, VALUE spec) {
   IOU_t *iou = get_iou(self);
 
@@ -273,14 +296,14 @@ VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
   VALUE multishot = rb_hash_aref(spec, SYM_multishot);
   unsigned flags = RTEST(multishot) ? IORING_TIMEOUT_MULTISHOT : 0;
 
-  VALUE time_spec = rb_funcall(cTimeSpec, rb_intern("new"), 1, interval);
+  VALUE time_spec = rb_funcall(cOpSpecData, rb_intern("new"), 1, interval);
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
 
   rb_hash_aset(spec, SYM_ts, time_spec);
   store_spec(iou, spec, id, SYM_timeout);
 
-  io_uring_prep_timeout(sqe, TimeSpec_ts_ptr(time_spec), 0, flags);
+  io_uring_prep_timeout(sqe, OpSpecData_ts_ptr(time_spec), 0, flags);
   iou->unsubmitted_sqes++;
   return id;
 }
@@ -465,6 +488,7 @@ void Init_IOU(void) {
   rb_define_method(cRing, "closed?", IOU_closed_p, 0);
   rb_define_method(cRing, "pending_ops", IOU_pending_ops, 0);
   
+  rb_define_method(cRing, "prep_accept", IOU_prep_accept, 1);
   rb_define_method(cRing, "prep_cancel", IOU_prep_cancel, 1);
   rb_define_method(cRing, "prep_close", IOU_prep_close, 1);
   rb_define_method(cRing, "prep_nop", IOU_prep_nop, 0);
@@ -478,6 +502,7 @@ void Init_IOU(void) {
 
   cArgumentError = rb_const_get(rb_cObject, rb_intern("ArgumentError"));
 
+  SYM_accept        = MAKE_SYM("accept");
   SYM_block         = MAKE_SYM("block");
   SYM_buffer        = MAKE_SYM("buffer");
   SYM_buffer_offset = MAKE_SYM("buffer_offset");
