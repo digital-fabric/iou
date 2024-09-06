@@ -405,7 +405,7 @@ class PrepReadTest < IOURingBaseTest
     assert_raises(ArgumentError) { ring.prep_read({}) }
   end
 
-  def test_prep_read_invalid_fd
+  def test_prep_read_bad_fd
     r, w = IO.pipe
 
     id = ring.prep_read(fd: w.fileno, buffer: +'', len: 8192)
@@ -576,20 +576,42 @@ class PrepAcceptTest < IOURingBaseTest
     super
   end
 
-  # def test_prep_accept
-  #   id = ring.prep_accept(fd: @server.fileno)
-  #   ring.submit
+  def test_prep_accept
+    id = ring.prep_accept(fd: @server.fileno)
+    ring.submit
 
-  #   t = Thread.new do
-  #     client = TCPSocket.new('127.0.0.1', @port)
-  #   end
+    t = Thread.new do
+      client = TCPSocket.new('127.0.0.1', @port)
+    end
 
-  #   c = ring.wait_for_completion
-  #   assert_equal id, c[:id]
-  #   assert_equal :accept, c[:accept]
-  #   fd = c[:result]
-  #   assert fd > 0
-  # ensure
-  #   t&.kill rescue nil
-  # end
+    c = ring.wait_for_completion
+    assert_equal id, c[:id]
+    assert_equal :accept, c[:op]
+    fd = c[:result]
+    assert fd > 0
+  ensure
+    t&.kill rescue nil
+  end
+
+  def test_prep_accept_invalid_args
+    assert_raises(ArgumentError) { ring.prep_accept() }
+    assert_raises(ArgumentError) { ring.prep_accept(foo: 1) }
+    assert_raises(TypeError) { ring.prep_accept(fd: 'bar') }
+    assert_raises(ArgumentError) { ring.prep_accept({}) }
+  end
+
+  def test_prep_accept_bad_fd
+    id = ring.prep_accept(fd: STDIN.fileno)
+    assert_equal 1, id
+
+    ring.submit
+    c = ring.wait_for_completion
+
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :accept, c[:op]
+    assert_equal STDIN.fileno, c[:fd]
+    assert_equal -Errno::ENOTSOCK::Errno, c[:result]
+  end
+
 end

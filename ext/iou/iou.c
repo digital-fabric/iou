@@ -12,14 +12,14 @@ VALUE SYM_buffer_offset;
 VALUE SYM_close;
 VALUE SYM_fd;
 VALUE SYM_id;
+VALUE SYM_interval;
 VALUE SYM_len;
 VALUE SYM_multishot;
 VALUE SYM_op;
-VALUE SYM_interval;
 VALUE SYM_read;
 VALUE SYM_result;
+VALUE SYM_spec_data;
 VALUE SYM_timeout;
-VALUE SYM_ts;
 VALUE SYM_write;
 
 static void IOU_mark(void *ptr) {
@@ -169,25 +169,27 @@ VALUE prep_cancel_id(IOU_t *iou, unsigned op_id_i) {
 }
 
 VALUE IOU_prep_accept(VALUE self, VALUE spec) {
-  // IOU_t *iou = get_iou(self);
-  // unsigned id_i = ++iou->op_counter;
-  // VALUE id = UINT2NUM(id_i);
+  IOU_t *iou = get_iou(self);
+  unsigned id_i = ++iou->op_counter;
+  VALUE id = UINT2NUM(id_i);
 
-  // VALUE values[1];
-  // get_required_kwargs(spec, values, 1, SYM_fd);
-  // VALUE fd = values[0];
+  VALUE values[1];
+  get_required_kwargs(spec, values, 1, SYM_fd);
+  VALUE fd = values[0];
   // VALUE multishot = rb_hash_aref(spec, SYM_multishot);
-  // // unsigned flags = RTEST(multishot) ? IORING_TIMEOUT_MULTISHOT : 0;
+  // unsigned flags = RTEST(multishot) ? IORING_TIMEOUT_MULTISHOT : 0;
 
-  // struct io_uring_sqe *sqe = get_sqe(iou);
-  // sqe->user_data = id_i;
+  VALUE spec_data = rb_funcall(cOpSpecData, rb_intern("new"), 0);
+  struct io_uring_sqe *sqe = get_sqe(iou);
+  sqe->user_data = id_i;
+  rb_hash_aset(spec, SYM_spec_data, spec_data);
+  store_spec(iou, spec, id, SYM_accept);
 
-  // store_spec(iou, spec, id, SYM_accept);
-
-  // io_uring_prep_timeout(sqe, OpSpecData_ts_ptr(time_spec), 0, flags);
-  // iou->unsubmitted_sqes++;
-  // return id;
-  return self;
+  struct sa_data *sa = OpSpecData_sa_get(spec_data);
+  io_uring_prep_accept(sqe, NUM2INT(fd), &sa->addr, &sa->len, 0);
+  // io_uring_prep_timeout(sqe, OpSpecData_ts(time_spec), 0, flags);
+  iou->unsubmitted_sqes++;
+  return id;
 }
 
 VALUE IOU_prep_cancel(VALUE self, VALUE spec) {
@@ -217,7 +219,6 @@ VALUE IOU_prep_close(VALUE self, VALUE spec) {
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
-
   store_spec(iou, spec, id, SYM_close);
 
   io_uring_prep_close(sqe, NUM2INT(fd));
@@ -276,7 +277,6 @@ VALUE IOU_prep_read(VALUE self, VALUE spec) {
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
-
   store_spec(iou, spec, id, SYM_read);
 
   void *ptr = prepare_read_buffer(buffer, len_i, buffer_offset_i);
@@ -296,14 +296,15 @@ VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
   VALUE multishot = rb_hash_aref(spec, SYM_multishot);
   unsigned flags = RTEST(multishot) ? IORING_TIMEOUT_MULTISHOT : 0;
 
-  VALUE time_spec = rb_funcall(cOpSpecData, rb_intern("new"), 1, interval);
+  VALUE spec_data = rb_funcall(cOpSpecData, rb_intern("new"), 0);
+  OpSpecData_ts_set(spec_data, interval);
+
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
-
-  rb_hash_aset(spec, SYM_ts, time_spec);
+  rb_hash_aset(spec, SYM_spec_data, spec_data);
   store_spec(iou, spec, id, SYM_timeout);
 
-  io_uring_prep_timeout(sqe, OpSpecData_ts_ptr(time_spec), 0, flags);
+  io_uring_prep_timeout(sqe, OpSpecData_ts_get(spec_data), 0, flags);
   iou->unsubmitted_sqes++;
   return id;
 }
@@ -322,7 +323,6 @@ VALUE IOU_prep_write(VALUE self, VALUE spec) {
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
-
   store_spec(iou, spec, id, SYM_write);
 
   io_uring_prep_write(sqe, NUM2INT(fd), RSTRING_PTR(buffer), nbytes, -1);
@@ -509,13 +509,13 @@ void Init_IOU(void) {
   SYM_close         = MAKE_SYM("close");
   SYM_fd            = MAKE_SYM("fd");
   SYM_id            = MAKE_SYM("id");
+  SYM_interval      = MAKE_SYM("interval");
   SYM_len           = MAKE_SYM("len");
   SYM_multishot     = MAKE_SYM("multishot");
   SYM_op            = MAKE_SYM("op");
-  SYM_interval      = MAKE_SYM("interval");
   SYM_read          = MAKE_SYM("read");
   SYM_result        = MAKE_SYM("result");
+  SYM_spec_data     = MAKE_SYM("spec_data");
   SYM_timeout       = MAKE_SYM("timeout");
-  SYM_ts            = MAKE_SYM("ts");
   SYM_write         = MAKE_SYM("write");
 }
