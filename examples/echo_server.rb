@@ -11,17 +11,23 @@ puts "Listening on  port 1234..."
 end
 
 def setup_connection(fd)
-  buffer +''
+  buffer = +''
+  puts "Connection accepted fd #{fd}"
   echo_prep_read(fd, buffer)
 end
 
 def echo_prep_read(fd, buffer)
-  @ring.prep_read(fd: fd, buffer: buffer, buffer_offset: -1) do |c|
+  @ring.prep_read(fd: fd, buffer: buffer, len: 4096, buffer_offset: -1) do |c|
     if c[:result] > 0
       echo_lines(fd, buffer)
       echo_prep_read(fd, buffer)
+    elsif c[:result] == 0
+      puts "Connection closed by client on fd #{fd}"
     else
-      @ring.prep_close(fd: fd)
+      puts "Got error #{c[:result]} on fd #{fd}, closing connection..."
+      @ring.prep_close(fd: fd) do |c|
+        puts "Connection closed on fd #{fd}, result #{c[:result]}"
+      end
     end
   end
 end
