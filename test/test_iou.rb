@@ -697,12 +697,19 @@ class ProcessCompletionsLoopTest < IOURingBaseTest
 end
 
 class PrepReadMultishotTest < IOURingBaseTest
+  def test_prep_read_multishot_invalid_args
+    assert_raises(ArgumentError) { ring.prep_read(multishot: true, buffer_group: 1) }
+    assert_raises(ArgumentError) { ring.prep_read(multishot: true, foo: 1) }
+    assert_raises(ArgumentError) { ring.prep_read(multishot: true, fd: 'bar', buffer: +'') }
+    assert_raises(ArgumentError) { ring.prep_read(multishot: true) }
+  end
+
   def test_prep_read_multishot
     r, w = IO.pipe
 
     bb = []
     bgid = ring.setup_buffer_ring(size: 4096, count: 1024)
-    assert_equal 1, bgid
+    assert_equal 0, bgid
 
     id = ring.prep_read(fd: r.fileno, multishot: true, buffer_group: bgid)
     assert_equal 1, id
@@ -716,6 +723,53 @@ class PrepReadMultishotTest < IOURingBaseTest
     assert_equal r.fileno, c[:fd]
     assert_equal 3, c[:result]
     assert_equal 'foo', c[:buffer]
+    assert_equal Encoding::ASCII_8BIT, c[:buffer].encoding
+    refute_nil ring.pending_ops[id]
+
+    w << 'bar'
+    c = ring.wait_for_completion
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :read, c[:op]
+    assert_equal r.fileno, c[:fd]
+    assert_equal 3, c[:result]
+    assert_equal 'bar', c[:buffer]
+    refute_nil ring.pending_ops[id]
+
+    w.close
+    c = ring.wait_for_completion
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :read, c[:op]
+    assert_equal r.fileno, c[:fd]
+    assert_equal 0, c[:result]
+    assert_nil ring.pending_ops[id]
+  end
+
+  def test_prep_read_multishot_utf8
+    # checking for UTF-8 incurs a serious performance degradation. We'll leave
+    # it for later...
+    skip
+
+    r, w = IO.pipe
+
+    bb = []
+    bgid = ring.setup_buffer_ring(size: 4096, count: 1024)
+    assert_equal 0, bgid
+
+    id = ring.prep_read(fd: r.fileno, multishot: true, utf8: true, buffer_group: bgid)
+    assert_equal 1, id
+    ring.submit
+
+    w << 'foo'
+    c = ring.wait_for_completion
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :read, c[:op]
+    assert_equal r.fileno, c[:fd]
+    assert_equal 3, c[:result]
+    assert_equal 'foo', c[:buffer]
+    assert_equal Encoding::UTF_8, c[:buffer].encoding
     refute_nil ring.pending_ops[id]
 
     w << 'bar'

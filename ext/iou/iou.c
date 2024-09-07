@@ -27,6 +27,7 @@ VALUE SYM_size;
 VALUE SYM_spec_data;
 VALUE SYM_stop;
 VALUE SYM_timeout;
+VALUE SYM_utf8;
 VALUE SYM_write;
 
 static void IOU_mark(void *ptr) {
@@ -44,7 +45,7 @@ void cleanup_iou(IOU_t *iou) {
 
   for (unsigned i = 0; i < iou->br_counter; i++) {
     struct buf_ring_descriptor *desc = iou->brs + i;
-    io_uring_free_buf_ring(&iou->ring, desc->br, desc->buf_count, i + 1);
+    io_uring_free_buf_ring(&iou->ring, desc->br, desc->buf_count, i);
     free(desc->buf_base);
   }
   iou->br_counter = 0;
@@ -190,7 +191,7 @@ VALUE IOU_setup_buffer_ring(VALUE self, VALUE opts) {
   desc->br = (struct io_uring_buf_ring *)mapped;
   io_uring_buf_ring_init(desc->br);
 
-  unsigned bg_id = ++iou->br_counter;
+  unsigned bg_id = iou->br_counter;
   struct io_uring_buf_reg reg = {
     .ring_addr = (unsigned long)desc->br,
 		.ring_entries = desc->buf_count,
@@ -198,11 +199,13 @@ VALUE IOU_setup_buffer_ring(VALUE self, VALUE opts) {
   };
 	int ret = io_uring_register_buf_ring(&iou->ring, &reg, 0);
 	if (ret) {
+    munmap(desc->br, desc->br_size);
     rb_syserr_fail(-ret, strerror(-ret));
 	}
 
   desc->buf_base = malloc(desc->buf_count * desc->buf_size);
   if (!desc->buf_base) {
+    io_uring_free_buf_ring(&iou->ring, desc->br, desc->buf_count, bg_id);
     rb_raise(rb_eRuntimeError, "Failed to allocate buffers");
   }
 
@@ -213,7 +216,7 @@ VALUE IOU_setup_buffer_ring(VALUE self, VALUE opts) {
       i, mask, i);
 	}
 	io_uring_buf_ring_advance(desc->br, desc->buf_count);
-
+  iou->br_counter++;
   return UINT2NUM(bg_id);
 }
 
@@ -483,7 +486,7 @@ static inline void update_read_buffer_from_buffer_ring(IOU_t *iou, VALUE spec, s
   unsigned bg_id = NUM2UINT(rb_hash_aref(spec, SYM_buffer_group));
   unsigned buf_idx = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
 
-  struct buf_ring_descriptor *desc = iou->brs + (bg_id - 1);
+  struct buf_ring_descriptor *desc = iou->brs + bg_id;
   char *src = desc->buf_base + desc->buf_size * buf_idx;
   buf = rb_str_new(src, cqe->res);
   
@@ -721,5 +724,6 @@ void Init_IOU(void) {
   SYM_spec_data     = MAKE_SYM("spec_data");
   SYM_stop          = MAKE_SYM("stop");
   SYM_timeout       = MAKE_SYM("timeout");
+  SYM_utf8          = MAKE_SYM("utf8");
   SYM_write         = MAKE_SYM("write");
 }
