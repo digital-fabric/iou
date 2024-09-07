@@ -650,3 +650,17 @@ class PrepAcceptTest < IOURingBaseTest
     tt.each { |t| t&.kill rescue nil }
   end
 end
+
+class EmitTest < IOURingBaseTest
+  def test_emit
+    o = { foo: 'bar' }
+    id = ring.emit(o)
+    assert_equal 1, id
+
+    c = ring.wait_for_completion
+    assert_equal o, c
+    assert_equal id, c[:id]
+    assert_equal :emit, c[:op]
+    assert_equal 0, c[:result]
+  end
+end

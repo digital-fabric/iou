@@ -10,6 +10,7 @@ VALUE SYM_block;
 VALUE SYM_buffer;
 VALUE SYM_buffer_offset;
 VALUE SYM_close;
+VALUE SYM_emit;
 VALUE SYM_fd;
 VALUE SYM_id;
 VALUE SYM_interval;
@@ -156,14 +157,20 @@ inline void store_spec(IOU_t *iou, VALUE spec, VALUE id, VALUE op) {
   rb_hash_aset(iou->pending_ops, id, spec);
 }
 
-VALUE prep_cancel_id(IOU_t *iou, unsigned op_id_i) {
+VALUE IOU_emit(VALUE self, VALUE obj) {
+  IOU_t *iou = get_iou(self);
   unsigned id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
 
   struct io_uring_sqe *sqe = get_sqe(iou);
-  io_uring_prep_cancel64(sqe, op_id_i, 0);
   sqe->user_data = id_i;
-  iou->unsubmitted_sqes++;
+  store_spec(iou, obj, id, SYM_emit);
+
+  io_uring_prep_nop(sqe);
+
+  // immediately submit
+  io_uring_submit(&iou->ring);
+  iou->unsubmitted_sqes = 0;
 
   return id;
 }
@@ -190,6 +197,18 @@ VALUE IOU_prep_accept(VALUE self, VALUE spec) {
   else
     io_uring_prep_accept(sqe, NUM2INT(fd), &sa->addr, &sa->len, 0);
   iou->unsubmitted_sqes++;
+  return id;
+}
+
+VALUE prep_cancel_id(IOU_t *iou, unsigned op_id_i) {
+  unsigned id_i = ++iou->op_counter;
+  VALUE id = UINT2NUM(id_i);
+
+  struct io_uring_sqe *sqe = get_sqe(iou);
+  io_uring_prep_cancel64(sqe, op_id_i, 0);
+  sqe->user_data = id_i;
+  iou->unsubmitted_sqes++;
+
   return id;
 }
 
@@ -465,6 +484,7 @@ VALUE IOU_process_completions(int argc, VALUE *argv, VALUE self) {
   int wait_i = RTEST(wait);
   unsigned count = 0;
 
+  // automatically submit any unsubmitted SQEs
   if (iou->unsubmitted_sqes) {
     io_uring_submit(&iou->ring);
     iou->unsubmitted_sqes = 0;
@@ -497,7 +517,8 @@ void Init_IOU(void) {
   rb_define_method(cRing, "close", IOU_close, 0);
   rb_define_method(cRing, "closed?", IOU_closed_p, 0);
   rb_define_method(cRing, "pending_ops", IOU_pending_ops, 0);
-  
+  rb_define_method(cRing, "emit", IOU_emit, 1);
+
   rb_define_method(cRing, "prep_accept", IOU_prep_accept, 1);
   rb_define_method(cRing, "prep_cancel", IOU_prep_cancel, 1);
   rb_define_method(cRing, "prep_close", IOU_prep_close, 1);
@@ -517,6 +538,7 @@ void Init_IOU(void) {
   SYM_buffer        = MAKE_SYM("buffer");
   SYM_buffer_offset = MAKE_SYM("buffer_offset");
   SYM_close         = MAKE_SYM("close");
+  SYM_emit          = MAKE_SYM("emit");
   SYM_fd            = MAKE_SYM("fd");
   SYM_id            = MAKE_SYM("id");
   SYM_interval      = MAKE_SYM("interval");
