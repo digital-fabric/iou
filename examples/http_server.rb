@@ -23,7 +23,7 @@ def setup_connection(fd)
   parser.on_message_complete = -> {
     http_send_response(fd, "Hello, world!\n") do
       @ring.prep_close(fd: fd)
-      en
+    end
   }
 
   http_prep_read(fd, parser)
@@ -47,7 +47,7 @@ def http_prep_read(fd, parser)
 end
 
 def http_send_response(fd, body)
-  msg = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: #{body.bytesize}\r\n\r\n#{body}"
+  msg = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: keep-alive\r\nContent-Length: #{body.bytesize}\r\n\r\n#{body}"
   @ring.prep_write(fd: fd, buffer: msg)
 end
 
