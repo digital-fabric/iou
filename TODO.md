@@ -1,9 +1,5 @@
 # io_uring ops
 
-- [v] multishot timeout
-- [v] close
-- [v] accept
-- [v] multishot accept
 - [ ] buffer rings
 
   See https://github.com/axboe/liburing/wiki/io_uring-and-networking-in-2023#provided-buffers
@@ -27,39 +23,6 @@
       read_lines_from_buffer(buffer)
     end
   end
-  ```
-
-- [ ] completion processing loop
-  - [ ] loop method
-  - [ ] signal method to stop loop (can also be used for other stuff)
-
-  ```ruby
-  Thread.new do
-    sleep 3
-    ring.signal(:stop)
-  end
-  ring.process_completions_loop
-  ```
-
-  Another possibility:
-
-  ```ruby
-  loop_stop = IOU::Signal.new
-  Thread.new do
-    sleep 3
-    ring.emit(loop_stop)
-  end
-  ring.loop(signal: loop_stop)
-  ```
-
-  Take 3:
-
-  ```ruby
-  Thread.new do
-    sleep 3
-    ring.emit(signal: :stop)
-  end
-  ring.loop
   ```
 
 - [ ] recv
