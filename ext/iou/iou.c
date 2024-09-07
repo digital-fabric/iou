@@ -1,5 +1,6 @@
 #include "iou.h"
 #include "ruby/thread.h"
+#include <sys/mman.h>
 
 VALUE mIOU;
 VALUE cRing;
@@ -8,8 +9,10 @@ VALUE cArgumentError;
 VALUE SYM_accept;
 VALUE SYM_block;
 VALUE SYM_buffer;
+VALUE SYM_buffer_group;
 VALUE SYM_buffer_offset;
 VALUE SYM_close;
+VALUE SYM_count;
 VALUE SYM_emit;
 VALUE SYM_fd;
 VALUE SYM_id;
@@ -20,6 +23,7 @@ VALUE SYM_op;
 VALUE SYM_read;
 VALUE SYM_result;
 VALUE SYM_signal;
+VALUE SYM_size;
 VALUE SYM_spec_data;
 VALUE SYM_stop;
 VALUE SYM_timeout;
@@ -35,9 +39,21 @@ static void IOU_compact(void *ptr) {
   iou->pending_ops = rb_gc_location(iou->pending_ops);
 }
 
+void cleanup_iou(IOU_t *iou) {
+  if (!iou->ring_initialized) return;
+
+  for (unsigned i = 0; i < iou->br_counter; i++) {
+    struct buf_ring_descriptor *desc = iou->brs + i;
+    io_uring_free_buf_ring(&iou->ring, desc->br, desc->buf_count, i + 1);
+    free(desc->buf_base);
+  }
+  iou->br_counter = 0;
+  io_uring_queue_exit(&iou->ring);
+  iou->ring_initialized = 0;
+}
+
 static void IOU_free(void *ptr) {
-  IOU_t *iou = ptr;
-  if (iou->ring_initialized) io_uring_queue_exit(&iou->ring);
+  cleanup_iou((IOU_t *)ptr);
 }
 
 static size_t IOU_size(const void *ptr) {
@@ -62,6 +78,7 @@ VALUE IOU_initialize(VALUE self) {
   iou->ring_initialized = 0;
   iou->op_counter = 0;
   iou->unsubmitted_sqes = 0;
+  iou->br_counter = 0;
 
   iou->pending_ops = rb_hash_new();
 
@@ -91,11 +108,7 @@ VALUE IOU_initialize(VALUE self) {
 
 VALUE IOU_close(VALUE self) {
   IOU_t *iou = RTYPEDDATA_DATA(self);
-  if (!iou->ring_initialized) goto done;
-
-  io_uring_queue_exit(&iou->ring);
-  iou->ring_initialized = 0;
-done:
+  cleanup_iou(iou);
   return self;
 }
 
@@ -149,6 +162,59 @@ static inline void get_required_kwargs(VALUE spec, VALUE *values, int argc, ...)
     values[i] = v;
   }
   va_end(ptr);
+}
+
+VALUE IOU_setup_buffer_ring(VALUE self, VALUE opts) {
+  IOU_t *iou = get_iou(self);
+
+  if (iou->br_counter == BUFFER_RING_MAX_COUNT)
+    rb_raise(rb_eRuntimeError, "Cannot setup more than BUFFER_RING_MAX_COUNT buffer rings");
+
+  VALUE values[2];
+  get_required_kwargs(opts, values, 2, SYM_count, SYM_size);
+  VALUE count = values[0];
+  VALUE size = values[1];
+
+  struct buf_ring_descriptor *desc = iou->brs + iou->br_counter;
+  desc->buf_count = NUM2UINT(count);
+  desc->buf_size = NUM2UINT(size);
+
+  desc->br_size = sizeof(struct io_uring_buf) * desc->buf_count;
+	void *mapped = mmap(
+    NULL, desc->br_size, PROT_READ | PROT_WRITE,
+		MAP_ANONYMOUS | MAP_PRIVATE, 0, 0
+  );
+  if (mapped == MAP_FAILED)
+    rb_raise(rb_eRuntimeError, "Failed to allocate buffer ring");
+
+  desc->br = (struct io_uring_buf_ring *)mapped;
+  io_uring_buf_ring_init(desc->br);
+
+  unsigned bg_id = ++iou->br_counter;
+  struct io_uring_buf_reg reg = {
+    .ring_addr = (unsigned long)desc->br,
+		.ring_entries = desc->buf_count,
+		.bgid = bg_id
+  };
+	int ret = io_uring_register_buf_ring(&iou->ring, &reg, 0);
+	if (ret) {
+    rb_syserr_fail(-ret, strerror(-ret));
+	}
+
+  desc->buf_base = malloc(desc->buf_count * desc->buf_size);
+  if (!desc->buf_base) {
+    rb_raise(rb_eRuntimeError, "Failed to allocate buffers");
+  }
+
+  int mask = io_uring_buf_ring_mask(desc->buf_count);
+	for (unsigned i = 0; i < desc->buf_count; i++) {
+		io_uring_buf_ring_add(
+      desc->br, desc->buf_base + i * desc->buf_size, desc->buf_size,
+      i, mask, i);
+	}
+	io_uring_buf_ring_advance(desc->br, desc->buf_count);
+
+  return UINT2NUM(bg_id);
 }
 
 inline void store_spec(IOU_t *iou, VALUE spec, VALUE id, VALUE op) {
@@ -281,8 +347,30 @@ static inline void adjust_read_buffer_len(VALUE buffer, int result, int ofs) {
   rb_str_set_len(buffer, len + (unsigned)ofs);
 }
 
+VALUE prep_read_multishot(IOU_t *iou, VALUE spec) {
+  unsigned id_i = ++iou->op_counter;
+  VALUE id = UINT2NUM(id_i);
+
+  VALUE values[2];
+  get_required_kwargs(spec, values, 2, SYM_fd, SYM_buffer_group);
+  int fd = NUM2INT(values[0]);
+  unsigned bg_id = NUM2UINT(values[1]);
+
+  struct io_uring_sqe *sqe = get_sqe(iou);
+  sqe->user_data = id_i;
+  store_spec(iou, spec, id, SYM_read);
+
+  io_uring_prep_read_multishot(sqe, fd, 0, -1, bg_id);
+  iou->unsubmitted_sqes++;
+  return id;
+}
+
 VALUE IOU_prep_read(VALUE self, VALUE spec) {
   IOU_t *iou = get_iou(self);
+
+  if (RTEST(rb_hash_aref(spec, SYM_multishot)))
+    return prep_read_multishot(iou, spec);
+
   unsigned id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
 
@@ -385,7 +473,42 @@ void *wait_for_completion_without_gvl(void *ptr) {
   return NULL;
 }
 
-static inline void update_read_buffer(VALUE spec, struct io_uring_cqe *cqe) {
+static inline void update_read_buffer_from_buffer_ring(IOU_t *iou, VALUE spec, struct io_uring_cqe *cqe) {
+  VALUE buf = Qnil;
+  if (cqe->res == 0) {
+    buf = rb_str_new_literal("");
+    goto done;
+  }
+  
+  unsigned bg_id = NUM2UINT(rb_hash_aref(spec, SYM_buffer_group));
+  unsigned buf_idx = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
+
+  struct buf_ring_descriptor *desc = iou->brs + (bg_id - 1);
+  char *src = desc->buf_base + desc->buf_size * buf_idx;
+  buf = rb_str_new(src, cqe->res);
+  
+  // release buffer back to io_uring
+  io_uring_buf_ring_add(
+    desc->br, src, desc->buf_size, buf_idx,
+		io_uring_buf_ring_mask(desc->buf_count), 0
+  );
+  io_uring_buf_ring_advance(desc->br, 1);
+done:
+  rb_hash_aset(spec, SYM_buffer, buf);
+  RB_GC_GUARD(buf);
+  return;
+}
+
+static inline void update_read_buffer(IOU_t *iou, VALUE spec, struct io_uring_cqe *cqe) {
+  if (cqe->res < 0) return;
+
+  if (cqe->flags & IORING_CQE_F_BUFFER) {
+    update_read_buffer_from_buffer_ring(iou, spec, cqe);
+    return;
+  }
+
+  if (cqe->res == 0) return;
+
   VALUE buffer = rb_hash_aref(spec, SYM_buffer);
   VALUE buffer_offset = rb_hash_aref(spec, SYM_buffer_offset);
   int buffer_offset_i = NIL_P(buffer_offset) ? 0 : NUM2INT(buffer_offset);
@@ -406,7 +529,7 @@ static inline VALUE get_cqe_op_spec(IOU_t *iou, struct io_uring_cqe *cqe, int *s
   // post completion work
   VALUE op = rb_hash_aref(spec, SYM_op);
   if (op == SYM_read)
-    update_read_buffer(spec, cqe);
+    update_read_buffer(iou, spec, cqe);
   else if (stop_flag && is_stop_signal(op, spec))
     *stop_flag = 1;
   
@@ -558,6 +681,8 @@ void Init_IOU(void) {
   rb_define_method(cRing, "close", IOU_close, 0);
   rb_define_method(cRing, "closed?", IOU_closed_p, 0);
   rb_define_method(cRing, "pending_ops", IOU_pending_ops, 0);
+  rb_define_method(cRing, "setup_buffer_ring", IOU_setup_buffer_ring, 1);
+
   rb_define_method(cRing, "emit", IOU_emit, 1);
 
   rb_define_method(cRing, "prep_accept", IOU_prep_accept, 1);
@@ -578,8 +703,10 @@ void Init_IOU(void) {
   SYM_accept        = MAKE_SYM("accept");
   SYM_block         = MAKE_SYM("block");
   SYM_buffer        = MAKE_SYM("buffer");
+  SYM_buffer_group  = MAKE_SYM("buffer_group");
   SYM_buffer_offset = MAKE_SYM("buffer_offset");
   SYM_close         = MAKE_SYM("close");
+  SYM_count         = MAKE_SYM("count");
   SYM_emit          = MAKE_SYM("emit");
   SYM_fd            = MAKE_SYM("fd");
   SYM_id            = MAKE_SYM("id");
@@ -590,6 +717,7 @@ void Init_IOU(void) {
   SYM_read          = MAKE_SYM("read");
   SYM_result        = MAKE_SYM("result");
   SYM_signal        = MAKE_SYM("signal");
+  SYM_size          = MAKE_SYM("size");
   SYM_spec_data     = MAKE_SYM("spec_data");
   SYM_stop          = MAKE_SYM("stop");
   SYM_timeout       = MAKE_SYM("timeout");

@@ -20,12 +20,27 @@
 #define likely(cond)	__builtin_expect(!!(cond), 1)
 #endif
 
+struct buf_ring_descriptor {
+  struct io_uring_buf_ring *br;
+  size_t br_size;
+  // struct io_uring_buf_ring *buf_ring;
+  unsigned buf_count;
+  unsigned buf_size;
+	char *buf_base;
+  // size_t buf_ring_size;
+};
+
+#define BUFFER_RING_MAX_COUNT 10
+
 typedef struct IOU_t {
   struct io_uring ring;
   unsigned int    ring_initialized;
   unsigned int    op_counter;
   unsigned int    unsubmitted_sqes;
   VALUE           pending_ops;
+
+  struct buf_ring_descriptor brs[BUFFER_RING_MAX_COUNT];
+  unsigned int br_counter;
 } IOU_t;
 
 struct sa_data {

@@ -689,10 +689,52 @@ class ProcessCompletionsLoopTest < IOURingBaseTest
     ring.process_completions_loop do |c|
       cc << c
     end
-
     assert_equal (1..3).to_a, cc.map { _1[:value] }
 
     c = ring.wait_for_completion
     assert_equal 4, c[:value]
+  end
+end
+
+class PrepReadMultishotTest < IOURingBaseTest
+  def test_prep_read_multishot
+    r, w = IO.pipe
+
+    bb = []
+    bgid = ring.setup_buffer_ring(size: 4096, count: 1024)
+    assert_equal 1, bgid
+
+    id = ring.prep_read(fd: r.fileno, multishot: true, buffer_group: bgid)
+    assert_equal 1, id
+    ring.submit
+
+    w << 'foo'
+    c = ring.wait_for_completion
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :read, c[:op]
+    assert_equal r.fileno, c[:fd]
+    assert_equal 3, c[:result]
+    assert_equal 'foo', c[:buffer]
+    refute_nil ring.pending_ops[id]
+
+    w << 'bar'
+    c = ring.wait_for_completion
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :read, c[:op]
+    assert_equal r.fileno, c[:fd]
+    assert_equal 3, c[:result]
+    assert_equal 'bar', c[:buffer]
+    refute_nil ring.pending_ops[id]
+
+    w.close
+    c = ring.wait_for_completion
+    assert_kind_of Hash, c
+    assert_equal id, c[:id]
+    assert_equal :read, c[:op]
+    assert_equal r.fileno, c[:fd]
+    assert_equal 0, c[:result]
+    assert_nil ring.pending_ops[id]
   end
 end
