@@ -523,9 +523,14 @@ VALUE IOU_process_completions(int argc, VALUE *argv, VALUE self) {
 VALUE IOU_process_completions_loop(VALUE self) {
   IOU_t *iou = get_iou(self);
   int stop_flag = 0;
+  wait_for_completion_ctx_t ctx = { .iou = iou };
 
   while (1) {
-    wait_for_completion_ctx_t ctx = { .iou = iou };
+    // automatically submit any unsubmitted SQEs
+    if (iou->unsubmitted_sqes) {
+      io_uring_submit(&iou->ring);
+      iou->unsubmitted_sqes = 0;
+    }
 
     rb_thread_call_without_gvl(wait_for_completion_without_gvl, (void *)&ctx, RUBY_UBF_IO, 0);
     if (unlikely(ctx.ret < 0)) {

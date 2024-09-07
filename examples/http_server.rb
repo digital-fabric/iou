@@ -52,7 +52,4 @@ def http_send_response(fd, body)
 end
 
 trap('SIGINT') { exit! }
-while true
-  @ring.submit
-  @ring.process_completions
-end
+@ring.process_completions_loop
