@@ -2,7 +2,7 @@ require_relative '../lib/iou'
 require 'socket'
 
 socket = TCPServer.open('127.0.0.1', 1234)
-puts "Listening on  port 1234..."
+puts 'Listening on port 1234...'
 
 @ring = IOU::Ring.new
 
@@ -11,8 +11,9 @@ puts "Listening on  port 1234..."
 end
 
 def setup_connection(fd)
-  buffer = +''
   puts "Connection accepted fd #{fd}"
+
+  buffer = +''
   echo_prep_read(fd, buffer)
 end
 
