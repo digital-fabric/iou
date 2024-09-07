@@ -19,7 +19,9 @@ VALUE SYM_multishot;
 VALUE SYM_op;
 VALUE SYM_read;
 VALUE SYM_result;
+VALUE SYM_signal;
 VALUE SYM_spec_data;
+VALUE SYM_stop;
 VALUE SYM_timeout;
 VALUE SYM_write;
 
@@ -390,7 +392,11 @@ static inline void update_read_buffer(VALUE spec, struct io_uring_cqe *cqe) {
   adjust_read_buffer_len(buffer, cqe->res, buffer_offset_i);
 }
 
-static inline VALUE get_cqe_op_spec(IOU_t *iou, struct io_uring_cqe *cqe) {
+inline int is_stop_signal(VALUE op, VALUE spec) {
+  return (op == SYM_emit) && (rb_hash_aref(spec, SYM_signal) == SYM_stop);
+}
+
+static inline VALUE get_cqe_op_spec(IOU_t *iou, struct io_uring_cqe *cqe, int *stop_flag) {
   VALUE id = UINT2NUM(cqe->user_data);
   VALUE spec = rb_hash_aref(iou->pending_ops, id);
   VALUE result = INT2NUM(cqe->res);
@@ -401,6 +407,8 @@ static inline VALUE get_cqe_op_spec(IOU_t *iou, struct io_uring_cqe *cqe) {
   VALUE op = rb_hash_aref(spec, SYM_op);
   if (op == SYM_read)
     update_read_buffer(spec, cqe);
+  else if (stop_flag && is_stop_signal(op, spec))
+    *stop_flag = 1;
   
   // for multishot ops, the IORING_CQE_F_MORE flag indicates more completions
   // will be coming, so we need to keep the spec. Otherwise, we remove it.
@@ -425,11 +433,13 @@ VALUE IOU_wait_for_completion(VALUE self) {
     rb_syserr_fail(-ctx.ret, strerror(-ctx.ret));
   }
   io_uring_cqe_seen(&iou->ring, ctx.cqe);
-  return get_cqe_op_spec(iou, ctx.cqe);
+  return get_cqe_op_spec(iou, ctx.cqe, 0);
 }
 
-static inline void process_cqe(IOU_t *iou, struct io_uring_cqe *cqe) {
-  VALUE spec = get_cqe_op_spec(iou, cqe);
+static inline void process_cqe(IOU_t *iou, struct io_uring_cqe *cqe, int *stop_flag) {
+  if (stop_flag) *stop_flag = 0;
+  VALUE spec = get_cqe_op_spec(iou, cqe, stop_flag);
+  if (stop_flag && *stop_flag) return;
 
   if (rb_block_given_p())
     rb_yield(spec);
@@ -449,7 +459,7 @@ static inline bool cq_ring_needs_flush(struct io_uring *ring) {
 
 // adapted from io_uring_peek_batch_cqe in liburing/queue.c
 // this peeks at cqes and handles each available cqe
-static inline int process_ready_cqes(IOU_t *iou) {
+static inline int process_ready_cqes(IOU_t *iou, int *stop_flag) {
   unsigned total_count = 0;
 
 iterate:
@@ -459,12 +469,16 @@ iterate:
   unsigned count = 0;
   io_uring_for_each_cqe(&iou->ring, head, cqe) {
     ++count;
-    process_cqe(iou, cqe);
+    if (stop_flag) *stop_flag = 0;
+    process_cqe(iou, cqe, stop_flag);
+    if (stop_flag && *stop_flag)
+      break;
   }
   io_uring_cq_advance(&iou->ring, count);
   total_count += count;
 
   if (overflow_checked) goto done;
+  if (stop_flag && *stop_flag) goto done;
 
   if (cq_ring_needs_flush(&iou->ring)) {
     io_uring_enter(iou->ring.ring_fd, 0, 0, IORING_ENTER_GETEVENTS, NULL);
@@ -499,11 +513,33 @@ VALUE IOU_process_completions(int argc, VALUE *argv, VALUE self) {
     }
     ++count;
     io_uring_cqe_seen(&iou->ring, ctx.cqe);
-    process_cqe(iou, ctx.cqe);
+    process_cqe(iou, ctx.cqe, 0);
   }
 
-  count += process_ready_cqes(iou);
+  count += process_ready_cqes(iou, 0);
   return UINT2NUM(count);
+}
+
+VALUE IOU_process_completions_loop(VALUE self) {
+  IOU_t *iou = get_iou(self);
+  int stop_flag = 0;
+
+  while (1) {
+    wait_for_completion_ctx_t ctx = { .iou = iou };
+
+    rb_thread_call_without_gvl(wait_for_completion_without_gvl, (void *)&ctx, RUBY_UBF_IO, 0);
+    if (unlikely(ctx.ret < 0)) {
+      rb_syserr_fail(-ctx.ret, strerror(-ctx.ret));
+    }
+    io_uring_cqe_seen(&iou->ring, ctx.cqe);
+    process_cqe(iou, ctx.cqe, &stop_flag);
+    if (stop_flag) goto done;
+
+    process_ready_cqes(iou, &stop_flag);
+    if (stop_flag) goto done;
+  }
+done:
+  return self;  
 }
 
 #define MAKE_SYM(sym) ID2SYM(rb_intern(sym))
@@ -530,6 +566,7 @@ void Init_IOU(void) {
   rb_define_method(cRing, "submit", IOU_submit, 0);
   rb_define_method(cRing, "wait_for_completion", IOU_wait_for_completion, 0);
   rb_define_method(cRing, "process_completions", IOU_process_completions, -1);
+  rb_define_method(cRing, "process_completions_loop", IOU_process_completions_loop, 0);
 
   cArgumentError = rb_const_get(rb_cObject, rb_intern("ArgumentError"));
 
@@ -547,7 +584,9 @@ void Init_IOU(void) {
   SYM_op            = MAKE_SYM("op");
   SYM_read          = MAKE_SYM("read");
   SYM_result        = MAKE_SYM("result");
+  SYM_signal        = MAKE_SYM("signal");
   SYM_spec_data     = MAKE_SYM("spec_data");
+  SYM_stop          = MAKE_SYM("stop");
   SYM_timeout       = MAKE_SYM("timeout");
   SYM_write         = MAKE_SYM("write");
 }

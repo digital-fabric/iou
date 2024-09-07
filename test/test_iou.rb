@@ -115,7 +115,7 @@ class PrepCancelTest < IOURingBaseTest
   end
 end
 
-class PrepareTimeoutMultishotTest < IOURingBaseTest
+class PrepTimeoutMultishotTest < IOURingBaseTest
   def test_prep_timeout_multishot
     interval = 0.03
     count = 0
@@ -662,5 +662,37 @@ class EmitTest < IOURingBaseTest
     assert_equal id, c[:id]
     assert_equal :emit, c[:op]
     assert_equal 0, c[:result]
+  end
+end
+
+class ProcessCompletionsLoopTest < IOURingBaseTest
+  def test_loop_stop
+    ring.emit(signal: :stop)
+
+    cc = []
+    ring.process_completions_loop do |c|
+      p c
+      cc << c
+    end
+
+    assert_equal [], cc
+  end
+
+  def test_loop
+    ring.emit(value: 1)
+    ring.emit(value: 2)
+    ring.emit(value: 3)
+    ring.emit(signal: :stop)
+    ring.emit(value: 4)
+
+    cc = []
+    ring.process_completions_loop do |c|
+      cc << c
+    end
+
+    assert_equal (1..3).to_a, cc.map { _1[:value] }
+
+    c = ring.wait_for_completion
+    assert_equal 4, c[:value]
   end
 end
