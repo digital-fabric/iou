@@ -719,7 +719,7 @@ class PrepReadMultishotTest < IOURingBaseTest
     c = ring.wait_for_completion
 
     # make sure the OS supports this op (the liburing docs are not clear)
-    skip if c[:result] == Errno::EINVAL::Errno
+    skip if c[:result] == (-Errno::EINVAL::Errno)
 
     assert_kind_of Hash, c
     assert_equal id, c[:id]
@@ -768,7 +768,7 @@ class PrepReadMultishotTest < IOURingBaseTest
     c = ring.wait_for_completion
 
     # make sure the OS supports this op (the liburing docs are not clear)
-    skip if c[:result] == Errno::EINVAL::Errno
+    skip if c[:result] == (-Errno::EINVAL::Errno)
 
     assert_kind_of Hash, c
     assert_equal id, c[:id]
