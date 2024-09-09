@@ -100,7 +100,7 @@ ring.wait_for_completion
 
 Examples for using IOU can be found in the examples directory:
 
-- [v] Echo server
-- [v] HTTP server
-- [v] Event loop (in the style of EventMachine)
-- [ ] Fiber-based concurrency
+- Echo server
+- HTTP server
+- Event loop (in the style of EventMachine)
+- Fiber-based concurrency
