@@ -46,7 +46,7 @@ class PrepTimeoutTest < IOURingBaseTest
     assert_equal id, c[:id]
     assert_equal :timeout, c[:op]
     assert_equal interval, c[:interval]
-    assert_equal -Errno::ETIME::Errno, c[:result]
+    assert_equal (-Errno::ETIME::Errno), c[:result]
   end
 
   def test_prep_timeout_invalid_args
@@ -74,7 +74,7 @@ class PrepCancelTest < IOURingBaseTest
     assert_equal timeout_id, c[:id]
     assert_equal :timeout, c[:op]
     assert_equal interval, c[:interval]
-    assert_equal -Errno::ECANCELED::Errno, c[:result]
+    assert_equal (-Errno::ECANCELED::Errno), c[:result]
   end
 
   def test_prep_cancel_kw
@@ -94,7 +94,7 @@ class PrepCancelTest < IOURingBaseTest
     assert_equal timeout_id, c[:id]
     assert_equal :timeout, c[:op]
     assert_equal interval, c[:interval]
-    assert_equal -Errno::ECANCELED::Errno, c[:result]
+    assert_equal (-Errno::ECANCELED::Errno), c[:result]
   end
 
   def test_prep_cancel_invalid_args
@@ -111,7 +111,7 @@ class PrepCancelTest < IOURingBaseTest
     ring.submit
     c = ring.wait_for_completion
     assert_equal cancel_id, c[:id]
-    assert_equal -Errno::ENOENT::Errno, c[:result]
+    assert_equal (-Errno::ENOENT::Errno), c[:result]
   end
 end
 
@@ -124,9 +124,9 @@ class PrepTimeoutMultishotTest < IOURingBaseTest
     t0 = monotonic_clock
     id = ring.prep_timeout(interval: interval, multishot: true) do |c|
       case c[:result]
-      when -Errno::ETIME::Errno
+      when (-Errno::ETIME::Errno)
         count += 1
-      when -Errno::ECANCELED::Errno
+      when (-Errno::ECANCELED::Errno)
         cancelled = true
       end
     end
@@ -151,7 +151,7 @@ class PrepTimeoutMultishotTest < IOURingBaseTest
 
     ring.prep_cancel(id)
     ring.submit
-    c = ring.process_completions(true)
+    ring.process_completions(true)
     assert_equal true, cancelled
     assert_equal 3, count
     assert_nil ring.pending_ops[id]
@@ -207,7 +207,7 @@ class PrepWriteTest < IOURingBaseTest
   end
 
   def test_prep_write_invalid_fd
-    r, w = IO.pipe
+    r, _w = IO.pipe
     s = 'foobar'
 
     id = ring.prep_write(fd: r.fileno, buffer: s)
@@ -220,7 +220,7 @@ class PrepWriteTest < IOURingBaseTest
     assert_equal id, c[:id]
     assert_equal :write, c[:op]
     assert_equal r.fileno, c[:fd]
-    assert_equal -Errno::EBADF::Errno, c[:result]
+    assert_equal (-Errno::EBADF::Errno), c[:result]
   end
 end
 
@@ -266,7 +266,8 @@ class PrepNopTest < IOURingBaseTest
     assert_nil c[:op]
     assert_equal 0, c[:result]    
   ensure
-    signaller.kill rescue nil
+    signaller&.kill rescue nil
+    waiter&.kill rescue nil
   end
 end
 
@@ -301,9 +302,9 @@ class ProcessCompletionsTest < IOURingBaseTest
   def test_process_completions_with_block
     r, w = IO.pipe
 
-    id1 = ring.prep_write(fd: w.fileno, buffer: 'foo')
-    id2 = ring.prep_write(fd: w.fileno, buffer: 'bar')
-    id3 = ring.prep_write(fd: w.fileno, buffer: 'baz')
+    ring.prep_write(fd: w.fileno, buffer: 'foo')
+    ring.prep_write(fd: w.fileno, buffer: 'bar')
+    ring.prep_write(fd: w.fileno, buffer: 'baz')
     ring.submit
     sleep 0.01
 
@@ -326,8 +327,8 @@ class ProcessCompletionsTest < IOURingBaseTest
   def test_process_completions_op_with_block
     cc = []
 
-    id1 = ring.prep_timeout(interval: 0.01) { cc << 1 }
-    id2 = ring.prep_timeout(interval: 0.02) { cc << 2 }
+    ring.prep_timeout(interval: 0.01) { cc << 1 }
+    ring.prep_timeout(interval: 0.02) { cc << 2 }
     ring.submit
 
     ret = ring.process_completions
@@ -344,8 +345,8 @@ class ProcessCompletionsTest < IOURingBaseTest
   def test_process_completions_op_with_block_no_submit
     cc = []
 
-    id1 = ring.prep_timeout(interval: 0.01) { cc << 1 }
-    id2 = ring.prep_timeout(interval: 0.02) { cc << 2 }
+    ring.prep_timeout(interval: 0.01) { cc << 1 }
+    ring.prep_timeout(interval: 0.02) { cc << 2 }
 
     ret = ring.process_completions
     assert_equal 0, ret
@@ -406,7 +407,7 @@ class PrepReadTest < IOURingBaseTest
   end
 
   def test_prep_read_bad_fd
-    r, w = IO.pipe
+    _r, w = IO.pipe
 
     id = ring.prep_read(fd: w.fileno, buffer: +'', len: 8192)
     assert_equal 1, id
@@ -418,7 +419,7 @@ class PrepReadTest < IOURingBaseTest
     assert_equal id, c[:id]
     assert_equal :read, c[:op]
     assert_equal w.fileno, c[:fd]
-    assert_equal -Errno::EBADF::Errno, c[:result]
+    assert_equal (-Errno::EBADF::Errno), c[:result]
   end
 
   def test_prep_read_with_block
@@ -513,7 +514,7 @@ end
 
 class PrepCloseTest < IOURingBaseTest
   def test_prep_close
-    r, w = IO.pipe
+    _r, w = IO.pipe
     fd = w.fileno
 
     id = ring.prep_close(fd: fd)
@@ -538,7 +539,7 @@ class PrepCloseTest < IOURingBaseTest
     assert_equal id, c[:id]
     assert_equal :close, c[:op]
     assert_equal fd, c[:fd]
-    assert_equal -Errno::EBADF::Errno, c[:result]
+    assert_equal (-Errno::EBADF::Errno), c[:result]
 
   end
 
@@ -560,7 +561,7 @@ class PrepCloseTest < IOURingBaseTest
     assert_equal id, c[:id]
     assert_equal :close, c[:op]
     assert_equal 9999, c[:fd]
-    assert_equal -Errno::EBADF::Errno, c[:result]
+    assert_equal (-Errno::EBADF::Errno), c[:result]
   end
 end
 
@@ -581,7 +582,7 @@ class PrepAcceptTest < IOURingBaseTest
     ring.submit
 
     t = Thread.new do
-      client = TCPSocket.new('127.0.0.1', @port)
+      TCPSocket.new('127.0.0.1', @port)
     end
 
     c = ring.wait_for_completion
@@ -611,7 +612,7 @@ class PrepAcceptTest < IOURingBaseTest
     assert_equal id, c[:id]
     assert_equal :accept, c[:op]
     assert_equal STDIN.fileno, c[:fd]
-    assert_equal -Errno::ENOTSOCK::Errno, c[:result]
+    assert_equal (-Errno::ENOTSOCK::Errno), c[:result]
   end
 
   def test_prep_accept_multishot
@@ -622,7 +623,7 @@ class PrepAcceptTest < IOURingBaseTest
 
     connect = -> {
       tt << Thread.new do
-        client = TCPSocket.new('127.0.0.1', @port)
+        TCPSocket.new('127.0.0.1', @port)
       end
     }
 
@@ -707,7 +708,6 @@ class PrepReadMultishotTest < IOURingBaseTest
   def test_prep_read_multishot
     r, w = IO.pipe
 
-    bb = []
     bgid = ring.setup_buffer_ring(size: 4096, count: 1024)
     assert_equal 0, bgid
 
@@ -753,7 +753,6 @@ class PrepReadMultishotTest < IOURingBaseTest
 
     r, w = IO.pipe
 
-    bb = []
     bgid = ring.setup_buffer_ring(size: 4096, count: 1024)
     assert_equal 0, bgid
 
