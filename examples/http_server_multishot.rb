@@ -22,9 +22,7 @@ def setup_connection(fd)
 
   parser = Http::Parser.new
   parser.on_message_complete = -> {
-    http_send_response(fd, "Hello, world!\n") do
-      @ring.prep_close(fd: fd)
-    end
+    http_send_response(fd, "Hello, world!\n")
   }
 
   http_prep_read(fd, parser)
