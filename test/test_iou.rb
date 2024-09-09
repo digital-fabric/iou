@@ -799,3 +799,36 @@ class PrepReadMultishotTest < IOURingBaseTest
     assert_nil ring.pending_ops[id]
   end
 end
+
+class OpCtxTest < IOURingBaseTest
+  def test_ctx_spec
+    id = ring.emit(foo: :bar)
+    assert_equal({ foo: :bar, id: 1, op: :emit }, ring.pending_ops[id].spec)
+  end
+
+  def test_ctx_type
+    id = ring.emit(v: 1)
+    assert_equal 1, id
+    assert_equal :emit, ring.pending_ops[id].spec[:op]
+
+    id = ring.prep_timeout(interval: 1)
+    assert_equal 2, id
+    assert_equal :timeout, ring.pending_ops[id].spec[:op]
+
+    id = ring.prep_read(fd: STDIN.fileno, buffer: +'', len: 42)
+    assert_equal 3, id
+    assert_equal :read, ring.pending_ops[id].spec[:op]
+
+    id = ring.prep_write(fd: STDOUT.fileno, buffer: '')
+    assert_equal 4, id
+    assert_equal :write, ring.pending_ops[id].spec[:op]
+
+    id = ring.prep_accept(fd: STDIN.fileno)
+    assert_equal 5, id
+    assert_equal :accept, ring.pending_ops[id].spec[:op]
+
+    id = ring.prep_close(fd: STDIN.fileno)
+    assert_equal 6, id
+    assert_equal :close, ring.pending_ops[id].spec[:op]
+  end
+end

@@ -41,7 +41,6 @@ VALUE OpCtx_initialize(VALUE self, VALUE spec, VALUE proc) {
 
 VALUE OpCtx_spec(VALUE self) {
   OpCtx_t *osd = RTYPEDDATA_DATA(self);
-
   return osd->spec;
 }
 
