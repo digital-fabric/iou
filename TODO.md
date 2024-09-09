@@ -28,3 +28,7 @@
   # read or timeout in 3 seconds
   ring.prep_read(fd: fd, buffer: +'', len: 4096, timeout: 3)
   ```
+
+- Add support for ractors
+
+  https://news.ycombinator.com/item?id=41490988

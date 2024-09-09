@@ -18,6 +18,7 @@ VALUE SYM_fd;
 VALUE SYM_id;
 VALUE SYM_interval;
 VALUE SYM_len;
+VALUE SYM_link;
 VALUE SYM_multishot;
 VALUE SYM_op;
 VALUE SYM_read;
@@ -232,6 +233,13 @@ static inline VALUE setup_op_ctx(IOURing_t *iour, enum op_type type, VALUE op, V
   return ctx;
 }
 
+static inline void setup_sqe(struct io_uring_sqe *sqe, int id, VALUE spec) {
+  sqe->user_data = id;
+  sqe->flags = 0;
+  if (spec != Qnil && RTEST(rb_hash_aref(spec, SYM_link)))
+    sqe->flags |= IOSQE_IO_LINK;
+}
+
 VALUE IOURing_emit(VALUE self, VALUE spec) {
   IOURing_t *iour = get_iou(self);
   unsigned id_i = ++iour->op_counter;
@@ -263,7 +271,7 @@ VALUE IOURing_prep_accept(VALUE self, VALUE spec) {
   VALUE multishot = rb_hash_aref(spec, SYM_multishot);
 
   struct io_uring_sqe *sqe = get_sqe(iour);
-  sqe->user_data = id_i;
+  setup_sqe(sqe, id_i, spec);
 
   VALUE ctx = setup_op_ctx(iour, OP_accept, SYM_accept, id, spec);
   struct sa_data *sa = OpCtx_sa_get(ctx);
@@ -313,7 +321,7 @@ VALUE IOURing_prep_close(VALUE self, VALUE spec) {
   VALUE fd = values[0];
 
   struct io_uring_sqe *sqe = get_sqe(iour);
-  sqe->user_data = id_i;
+  setup_sqe(sqe, id_i, spec);
 
   setup_op_ctx(iour, OP_close, SYM_close, id, spec);
 
@@ -366,7 +374,7 @@ VALUE prep_read_multishot(IOURing_t *iour, VALUE spec) {
   int utf8 = RTEST(rb_hash_aref(spec, SYM_utf8));
 
   struct io_uring_sqe *sqe = get_sqe(iour);
-  sqe->user_data = id_i;
+  setup_sqe(sqe, id_i, spec);
 
   VALUE ctx = setup_op_ctx(iour, OP_read, SYM_read, id, spec);
   OpCtx_rd_set(ctx, Qnil, 0, bg_id, utf8);
@@ -398,7 +406,7 @@ VALUE IOURing_prep_read(VALUE self, VALUE spec) {
   int utf8 = RTEST(rb_hash_aref(spec, SYM_utf8));
 
   struct io_uring_sqe *sqe = get_sqe(iour);
-  sqe->user_data = id_i;
+  setup_sqe(sqe, id_i, spec);
 
   VALUE ctx = setup_op_ctx(iour, OP_read, SYM_read, id, spec);
   OpCtx_rd_set(ctx, buffer, buffer_offset_i, 0, utf8);
@@ -421,7 +429,7 @@ VALUE IOURing_prep_timeout(VALUE self, VALUE spec) {
   unsigned flags = RTEST(multishot) ? IORING_TIMEOUT_MULTISHOT : 0;
 
   struct io_uring_sqe *sqe = get_sqe(iour);
-  sqe->user_data = id_i;
+  setup_sqe(sqe, id_i, spec);
 
   VALUE ctx = setup_op_ctx(iour, OP_timeout, SYM_timeout, id, spec);
   OpCtx_ts_set(ctx, interval);
@@ -444,7 +452,7 @@ VALUE IOURing_prep_write(VALUE self, VALUE spec) {
   unsigned nbytes = NIL_P(len) ? RSTRING_LEN(buffer) : NUM2UINT(len);
 
   struct io_uring_sqe *sqe = get_sqe(iour);
-  sqe->user_data = id_i;
+  setup_sqe(sqe, id_i, spec);
 
   setup_op_ctx(iour, OP_write, SYM_write, id, spec);
 
@@ -455,15 +463,15 @@ VALUE IOURing_prep_write(VALUE self, VALUE spec) {
 
 VALUE IOURing_submit(VALUE self) {
   IOURing_t *iour = get_iou(self);
-  if (!iour->unsubmitted_sqes) goto done;
+  if (!iour->unsubmitted_sqes)
+    return INT2NUM(0);
 
   iour->unsubmitted_sqes = 0;
   int ret = io_uring_submit(&iour->ring);
   if (ret < 0)
     rb_syserr_fail(-ret, strerror(-ret));
 
-done:
-  return self;
+  return INT2NUM(ret);
 }
 
 inline VALUE make_empty_op_with_result(VALUE id, VALUE result) {
@@ -733,6 +741,7 @@ void Init_IOURing(void) {
   SYM_id            = MAKE_SYM("id");
   SYM_interval      = MAKE_SYM("interval");
   SYM_len           = MAKE_SYM("len");
+  SYM_link          = MAKE_SYM("link");
   SYM_multishot     = MAKE_SYM("multishot");
   SYM_op            = MAKE_SYM("op");
   SYM_read          = MAKE_SYM("read");
