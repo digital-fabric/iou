@@ -828,3 +828,24 @@ class OpCtxTest < IOURingBaseTest
     assert_equal :close, ring.pending_ops[id].spec[:op]
   end
 end
+
+class LinkTest < IOURingBaseTest
+  def test_linked_submissions
+    r, w = IO.pipe
+    id1 = ring.prep_write(fd: w.fileno, buffer: 'foo', link: true)
+    ring.submit
+
+    sleep 0.001 # ensure no race
+    ret = ring.process_completions
+    assert_equal 0, ret
+
+    id2 = ring.prep_write(fd: w.fileno, buffer: 'bar')
+    ring.submit
+
+    ret = ring.process_completions(true)
+    assert_equal 2, ret
+
+    w.close
+    assert_equal 'foobar', r.read
+  end
+end

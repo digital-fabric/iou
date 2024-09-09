@@ -32,7 +32,7 @@ struct buf_ring_descriptor {
 
 #define BUFFER_RING_MAX_COUNT 10
 
-typedef struct IOU_t {
+typedef struct IOURing_t {
   struct io_uring ring;
   unsigned int    ring_initialized;
   unsigned int    op_counter;
@@ -41,7 +41,7 @@ typedef struct IOU_t {
 
   struct buf_ring_descriptor brs[BUFFER_RING_MAX_COUNT];
   unsigned int br_counter;
-} IOU_t;
+} IOURing_t;
 
 struct sa_data {
   struct sockaddr addr;
