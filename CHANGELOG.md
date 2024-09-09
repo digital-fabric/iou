@@ -1,3 +1,5 @@
+# 2024-09-09 Version 0.2
+
 - Add UTF8 encoding option for multishot read.
 - Implement `OpCtx` as wrapper for op specs. This removes the need to call
   `rb_hash_aref` upon completion (except for pulling the ctx from the
