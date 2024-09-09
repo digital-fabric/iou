@@ -48,20 +48,53 @@ struct sa_data {
   socklen_t len;
 };
 
+struct read_data {
+  VALUE buffer;
+  int buffer_offset;
+  unsigned bg_id;
+};
+
+enum op_type {
+  OP_accept,
+  OP_cancel,
+  OP_close,
+  OP_emit,
+  OP_nop,
+  OP_read,
+  OP_timeout,
+  OP_write
+};
+
 typedef struct OpCtx_t {
+  enum op_type type;
   VALUE spec;
+  VALUE proc;
   union {
     struct __kernel_timespec ts;
     struct sa_data sa;
+    struct read_data rd;
   } data;
+  int stop_signal;
 } OpCtx_t;
 
 extern VALUE mIOU;
 extern VALUE cOpCtx;
 
+enum op_type OpCtx_type_get(VALUE self);
+void OpCtx_type_set(VALUE self, enum op_type type);
+
+VALUE OpCtx_spec_get(VALUE self);
+VALUE OpCtx_proc_get(VALUE self);
+
 struct __kernel_timespec *OpCtx_ts_get(VALUE self);
 void OpCtx_ts_set(VALUE self, VALUE value);
 
 struct sa_data *OpCtx_sa_get(VALUE self);
+
+struct read_data *OpCtx_rd_get(VALUE self);
+void OpCtx_rd_set(VALUE self, VALUE buffer, int buffer_offset, unsigned bg_id);
+
+int OpCtx_stop_signal_p(VALUE self);
+void OpCtx_stop_signal_set(VALUE self);
 
 #endif // IOU_H

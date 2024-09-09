@@ -16,7 +16,7 @@ class IOURingTest < IOURingBaseTest
     assert_equal({}, ring.pending_ops)
 
     id = ring.prep_timeout(interval: 1)
-    spec = ring.pending_ops[id]
+    spec = ring.pending_ops[id].spec
     assert_equal id, spec[:id]
     assert_equal :timeout, spec[:op]
     assert_equal 1, spec[:interval]

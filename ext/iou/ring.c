@@ -220,22 +220,28 @@ VALUE IOU_setup_buffer_ring(VALUE self, VALUE opts) {
   return UINT2NUM(bg_id);
 }
 
-inline void store_spec(IOU_t *iou, VALUE spec, VALUE id, VALUE op) {
+static inline VALUE setup_op_ctx(IOU_t *iou, enum op_type type, VALUE op, VALUE id, VALUE spec) {
   rb_hash_aset(spec, SYM_id, id);
   rb_hash_aset(spec, SYM_op, op);
-  if (rb_block_given_p())
-    rb_hash_aset(spec, SYM_block, rb_block_proc());
-  rb_hash_aset(iou->pending_ops, id, spec);
+  VALUE block_proc = rb_block_given_p() ? rb_block_proc() : Qnil;
+  if (block_proc != Qnil)
+    rb_hash_aset(spec, SYM_block, block_proc);
+  VALUE ctx = rb_funcall(cOpCtx, rb_intern("new"), 2, spec, block_proc);
+  OpCtx_type_set(ctx, type);
+  rb_hash_aset(iou->pending_ops, id, ctx);
+  return ctx;
 }
 
-VALUE IOU_emit(VALUE self, VALUE obj) {
+VALUE IOU_emit(VALUE self, VALUE spec) {
   IOU_t *iou = get_iou(self);
   unsigned id_i = ++iou->op_counter;
   VALUE id = UINT2NUM(id_i);
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
-  store_spec(iou, obj, id, SYM_emit);
+  VALUE ctx = setup_op_ctx(iou, OP_emit, SYM_emit, id, spec);
+  if (rb_hash_aref(spec, SYM_signal) == SYM_stop)
+    OpCtx_stop_signal_set(ctx);
 
   io_uring_prep_nop(sqe);
 
@@ -256,13 +262,11 @@ VALUE IOU_prep_accept(VALUE self, VALUE spec) {
   VALUE fd = values[0];
   VALUE multishot = rb_hash_aref(spec, SYM_multishot);
 
-  VALUE spec_data = rb_funcall(cOpCtx, rb_intern("new"), 0);
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
-  rb_hash_aset(spec, SYM_spec_data, spec_data);
-  store_spec(iou, spec, id, SYM_accept);
 
-  struct sa_data *sa = OpCtx_sa_get(spec_data);
+  VALUE ctx = setup_op_ctx(iou, OP_accept, SYM_accept, id, spec);
+  struct sa_data *sa = OpCtx_sa_get(ctx);
   if (RTEST(multishot))
     io_uring_prep_multishot_accept(sqe, NUM2INT(fd), &sa->addr, &sa->len, 0);
   else
@@ -310,7 +314,8 @@ VALUE IOU_prep_close(VALUE self, VALUE spec) {
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
-  store_spec(iou, spec, id, SYM_close);
+
+  setup_op_ctx(iou, OP_close, SYM_close, id, spec);
 
   io_uring_prep_close(sqe, NUM2INT(fd));
   iou->unsubmitted_sqes++;
@@ -361,7 +366,9 @@ VALUE prep_read_multishot(IOU_t *iou, VALUE spec) {
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
-  store_spec(iou, spec, id, SYM_read);
+
+  VALUE ctx = setup_op_ctx(iou, OP_read, SYM_read, id, spec);
+  OpCtx_rd_set(ctx, Qnil, 0, bg_id);
 
   io_uring_prep_read_multishot(sqe, fd, 0, -1, bg_id);
   iou->unsubmitted_sqes++;
@@ -390,7 +397,9 @@ VALUE IOU_prep_read(VALUE self, VALUE spec) {
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
-  store_spec(iou, spec, id, SYM_read);
+
+  VALUE ctx = setup_op_ctx(iou, OP_read, SYM_read, id, spec);
+  OpCtx_rd_set(ctx, buffer, buffer_offset_i, 0);
 
   void *ptr = prepare_read_buffer(buffer, len_i, buffer_offset_i);
   io_uring_prep_read(sqe, NUM2INT(fd), ptr, len_i, -1);
@@ -409,15 +418,13 @@ VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
   VALUE multishot = rb_hash_aref(spec, SYM_multishot);
   unsigned flags = RTEST(multishot) ? IORING_TIMEOUT_MULTISHOT : 0;
 
-  VALUE spec_data = rb_funcall(cOpCtx, rb_intern("new"), 0);
-  OpCtx_ts_set(spec_data, interval);
-
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
-  rb_hash_aset(spec, SYM_spec_data, spec_data);
-  store_spec(iou, spec, id, SYM_timeout);
 
-  io_uring_prep_timeout(sqe, OpCtx_ts_get(spec_data), 0, flags);
+  VALUE ctx = setup_op_ctx(iou, OP_timeout, SYM_timeout, id, spec);
+  OpCtx_ts_set(ctx, interval);
+
+  io_uring_prep_timeout(sqe, OpCtx_ts_get(ctx), 0, flags);
   iou->unsubmitted_sqes++;
   return id;
 }
@@ -436,7 +443,8 @@ VALUE IOU_prep_write(VALUE self, VALUE spec) {
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
-  store_spec(iou, spec, id, SYM_write);
+
+  setup_op_ctx(iou, OP_write, SYM_write, id, spec);
 
   io_uring_prep_write(sqe, NUM2INT(fd), RSTRING_PTR(buffer), nbytes, -1);
   iou->unsubmitted_sqes++;
@@ -476,106 +484,112 @@ void *wait_for_completion_without_gvl(void *ptr) {
   return NULL;
 }
 
-static inline void update_read_buffer_from_buffer_ring(IOU_t *iou, VALUE spec, struct io_uring_cqe *cqe) {
+static inline void update_read_buffer_from_buffer_ring(IOU_t *iou, VALUE ctx, struct io_uring_cqe *cqe) {
   VALUE buf = Qnil;
   if (cqe->res == 0) {
     buf = rb_str_new_literal("");
     goto done;
   }
   
-  unsigned bg_id = NUM2UINT(rb_hash_aref(spec, SYM_buffer_group));
+  struct read_data *rd = OpCtx_rd_get(ctx);
   unsigned buf_idx = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
 
-  struct buf_ring_descriptor *desc = iou->brs + bg_id;
+  struct buf_ring_descriptor *desc = iou->brs + rd->bg_id;
   char *src = desc->buf_base + desc->buf_size * buf_idx;
   buf = rb_str_new(src, cqe->res);
   
-  // release buffer back to io_uring
+  // add buffer back to buffer ring
   io_uring_buf_ring_add(
     desc->br, src, desc->buf_size, buf_idx,
 		io_uring_buf_ring_mask(desc->buf_count), 0
   );
   io_uring_buf_ring_advance(desc->br, 1);
 done:
-  rb_hash_aset(spec, SYM_buffer, buf);
+  rb_hash_aset(OpCtx_spec_get(ctx), SYM_buffer, buf);
   RB_GC_GUARD(buf);
   return;
 }
 
-static inline void update_read_buffer(IOU_t *iou, VALUE spec, struct io_uring_cqe *cqe) {
+static inline void update_read_buffer(IOU_t *iou, VALUE ctx, struct io_uring_cqe *cqe) {
   if (cqe->res < 0) return;
 
   if (cqe->flags & IORING_CQE_F_BUFFER) {
-    update_read_buffer_from_buffer_ring(iou, spec, cqe);
+    update_read_buffer_from_buffer_ring(iou, ctx, cqe);
     return;
   }
 
   if (cqe->res == 0) return;
 
-  VALUE buffer = rb_hash_aref(spec, SYM_buffer);
-  VALUE buffer_offset = rb_hash_aref(spec, SYM_buffer_offset);
-  int buffer_offset_i = NIL_P(buffer_offset) ? 0 : NUM2INT(buffer_offset);
-  adjust_read_buffer_len(buffer, cqe->res, buffer_offset_i);
+  struct read_data *rd = OpCtx_rd_get(ctx);
+  adjust_read_buffer_len(rd->buffer, cqe->res, rd->buffer_offset);
 }
 
-inline int is_stop_signal(VALUE op, VALUE spec) {
-  return (op == SYM_emit) && (rb_hash_aref(spec, SYM_signal) == SYM_stop);
-}
-
-static inline VALUE get_cqe_op_spec(IOU_t *iou, struct io_uring_cqe *cqe, int *stop_flag) {
+static inline VALUE get_cqe_ctx(IOU_t *iou, struct io_uring_cqe *cqe, int *stop_flag, VALUE *spec) {
   VALUE id = UINT2NUM(cqe->user_data);
-  VALUE spec = rb_hash_aref(iou->pending_ops, id);
+  VALUE ctx = rb_hash_aref(iou->pending_ops, id);
   VALUE result = INT2NUM(cqe->res);
-  if (NIL_P(spec))
-    return make_empty_op_with_result(id, result);
+  if (NIL_P(ctx)) {
+    *spec = make_empty_op_with_result(id, result);
+    return Qnil;
+  }
 
   // post completion work
-  VALUE op = rb_hash_aref(spec, SYM_op);
-  if (op == SYM_read)
-    update_read_buffer(iou, spec, cqe);
-  else if (stop_flag && is_stop_signal(op, spec))
-    *stop_flag = 1;
+  switch (OpCtx_type_get(ctx)) {
+    case OP_read:
+      update_read_buffer(iou, ctx, cqe);
+      break;
+    case OP_emit:
+      if (stop_flag && OpCtx_stop_signal_p(ctx))
+        *stop_flag = 1;
+      break;
+    default:
+  }
   
   // for multishot ops, the IORING_CQE_F_MORE flag indicates more completions
   // will be coming, so we need to keep the spec. Otherwise, we remove it.
   if (!(cqe->flags & IORING_CQE_F_MORE))
     rb_hash_delete(iou->pending_ops, id);
 
-  rb_hash_aset(spec, SYM_result, result);
-  RB_GC_GUARD(spec);
-  return spec;
+  *spec = OpCtx_spec_get(ctx);
+  rb_hash_aset(*spec, SYM_result, result);
+  RB_GC_GUARD(ctx);
+  return ctx;
 }
 
 VALUE IOU_wait_for_completion(VALUE self) {
   IOU_t *iou = get_iou(self);
 
-  wait_for_completion_ctx_t ctx = {
+  wait_for_completion_ctx_t cqe_ctx = {
     .iou = iou
   };
 
-  rb_thread_call_without_gvl(wait_for_completion_without_gvl, (void *)&ctx, RUBY_UBF_IO, 0);
+  rb_thread_call_without_gvl(wait_for_completion_without_gvl, (void *)&cqe_ctx, RUBY_UBF_IO, 0);
 
-  if (unlikely(ctx.ret < 0)) {
-    rb_syserr_fail(-ctx.ret, strerror(-ctx.ret));
+  if (unlikely(cqe_ctx.ret < 0)) {
+    rb_syserr_fail(-cqe_ctx.ret, strerror(-cqe_ctx.ret));
   }
-  io_uring_cqe_seen(&iou->ring, ctx.cqe);
-  return get_cqe_op_spec(iou, ctx.cqe, 0);
+  io_uring_cqe_seen(&iou->ring, cqe_ctx.cqe);
+
+  VALUE spec = Qnil;
+  get_cqe_ctx(iou, cqe_ctx.cqe, 0, &spec);
+  return spec;
 }
 
-static inline void process_cqe(IOU_t *iou, struct io_uring_cqe *cqe, int *stop_flag) {
+static inline void process_cqe(IOU_t *iou, struct io_uring_cqe *cqe, int block_given, int *stop_flag) {
   if (stop_flag) *stop_flag = 0;
-  VALUE spec = get_cqe_op_spec(iou, cqe, stop_flag);
+  VALUE spec;
+  VALUE ctx = get_cqe_ctx(iou, cqe, stop_flag, &spec);
   if (stop_flag && *stop_flag) return;
 
-  if (rb_block_given_p())
+  if (block_given)
     rb_yield(spec);
-  else {
-    VALUE block = rb_hash_aref(spec, SYM_block);
-    if (RTEST(block))
-      rb_proc_call_with_block_kw(block, 1, &spec, Qnil, Qnil);
+  else if (ctx != Qnil) {
+    VALUE proc = OpCtx_proc_get(ctx);
+    if (RTEST(proc))
+      rb_proc_call_with_block_kw(proc, 1, &spec, Qnil, Qnil);
   }
 
-  RB_GC_GUARD(spec);
+  RB_GC_GUARD(ctx);
 }
 
 // copied from liburing/queue.c
@@ -585,7 +599,7 @@ static inline bool cq_ring_needs_flush(struct io_uring *ring) {
 
 // adapted from io_uring_peek_batch_cqe in liburing/queue.c
 // this peeks at cqes and handles each available cqe
-static inline int process_ready_cqes(IOU_t *iou, int *stop_flag) {
+static inline int process_ready_cqes(IOU_t *iou, int block_given, int *stop_flag) {
   unsigned total_count = 0;
 
 iterate:
@@ -596,7 +610,7 @@ iterate:
   io_uring_for_each_cqe(&iou->ring, head, cqe) {
     ++count;
     if (stop_flag) *stop_flag = 0;
-    process_cqe(iou, cqe, stop_flag);
+    process_cqe(iou, cqe, block_given, stop_flag);
     if (stop_flag && *stop_flag)
       break;
   }
@@ -618,6 +632,7 @@ done:
 
 VALUE IOU_process_completions(int argc, VALUE *argv, VALUE self) {
   IOU_t *iou = get_iou(self);
+  int block_given = rb_block_given_p();
   VALUE wait;
 
   rb_scan_args(argc, argv, "01", &wait);
@@ -639,15 +654,16 @@ VALUE IOU_process_completions(int argc, VALUE *argv, VALUE self) {
     }
     ++count;
     io_uring_cqe_seen(&iou->ring, ctx.cqe);
-    process_cqe(iou, ctx.cqe, 0);
+    process_cqe(iou, ctx.cqe, block_given, 0);
   }
 
-  count += process_ready_cqes(iou, 0);
+  count += process_ready_cqes(iou, block_given, 0);
   return UINT2NUM(count);
 }
 
 VALUE IOU_process_completions_loop(VALUE self) {
   IOU_t *iou = get_iou(self);
+  int block_given = rb_block_given_p();
   int stop_flag = 0;
   wait_for_completion_ctx_t ctx = { .iou = iou };
 
@@ -663,14 +679,14 @@ VALUE IOU_process_completions_loop(VALUE self) {
       rb_syserr_fail(-ctx.ret, strerror(-ctx.ret));
     }
     io_uring_cqe_seen(&iou->ring, ctx.cqe);
-    process_cqe(iou, ctx.cqe, &stop_flag);
+    process_cqe(iou, ctx.cqe, block_given, &stop_flag);
     if (stop_flag) goto done;
 
-    process_ready_cqes(iou, &stop_flag);
+    process_ready_cqes(iou, block_given, &stop_flag);
     if (stop_flag) goto done;
   }
 done:
-  return self;  
+  return self;
 }
 
 #define MAKE_SYM(sym) ID2SYM(rb_intern(sym))
