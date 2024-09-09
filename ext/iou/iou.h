@@ -49,6 +49,7 @@ struct sa_data {
 };
 
 typedef struct OpCtx_t {
+  VALUE spec;
   union {
     struct __kernel_timespec ts;
     struct sa_data sa;
