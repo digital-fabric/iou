@@ -81,7 +81,7 @@ VALUE IOURing_initialize(VALUE self) {
   iour->unsubmitted_sqes = 0;
   iour->br_counter = 0;
 
-  iour->pending_ops = rb_hash_new();
+  RB_OBJ_WRITE(self, &iour->pending_ops, rb_hash_new());
 
   unsigned prepared_limit = 1024;
   int flags = 0;
