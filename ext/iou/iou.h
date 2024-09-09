@@ -52,6 +52,7 @@ struct read_data {
   VALUE buffer;
   int buffer_offset;
   unsigned bg_id;
+  int utf8_encoding;
 };
 
 enum op_type {
@@ -92,7 +93,7 @@ void OpCtx_ts_set(VALUE self, VALUE value);
 struct sa_data *OpCtx_sa_get(VALUE self);
 
 struct read_data *OpCtx_rd_get(VALUE self);
-void OpCtx_rd_set(VALUE self, VALUE buffer, int buffer_offset, unsigned bg_id);
+void OpCtx_rd_set(VALUE self, VALUE buffer, int buffer_offset, unsigned bg_id, int utf8_encoding);
 
 int OpCtx_stop_signal_p(VALUE self);
 void OpCtx_stop_signal_set(VALUE self);

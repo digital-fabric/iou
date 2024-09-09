@@ -363,12 +363,13 @@ VALUE prep_read_multishot(IOU_t *iou, VALUE spec) {
   get_required_kwargs(spec, values, 2, SYM_fd, SYM_buffer_group);
   int fd = NUM2INT(values[0]);
   unsigned bg_id = NUM2UINT(values[1]);
+  int utf8 = RTEST(rb_hash_aref(spec, SYM_utf8));
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
 
   VALUE ctx = setup_op_ctx(iou, OP_read, SYM_read, id, spec);
-  OpCtx_rd_set(ctx, Qnil, 0, bg_id);
+  OpCtx_rd_set(ctx, Qnil, 0, bg_id, utf8);
 
   io_uring_prep_read_multishot(sqe, fd, 0, -1, bg_id);
   iou->unsubmitted_sqes++;
@@ -394,12 +395,13 @@ VALUE IOU_prep_read(VALUE self, VALUE spec) {
 
   VALUE buffer_offset = rb_hash_aref(spec, SYM_buffer_offset);
   int buffer_offset_i = NIL_P(buffer_offset) ? 0 : NUM2INT(buffer_offset);
+  int utf8 = RTEST(rb_hash_aref(spec, SYM_utf8));
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
 
   VALUE ctx = setup_op_ctx(iou, OP_read, SYM_read, id, spec);
-  OpCtx_rd_set(ctx, buffer, buffer_offset_i, 0);
+  OpCtx_rd_set(ctx, buffer, buffer_offset_i, 0, utf8);
 
   void *ptr = prepare_read_buffer(buffer, len_i, buffer_offset_i);
   io_uring_prep_read(sqe, NUM2INT(fd), ptr, len_i, -1);
@@ -496,7 +498,7 @@ static inline void update_read_buffer_from_buffer_ring(IOU_t *iou, VALUE ctx, st
 
   struct buf_ring_descriptor *desc = iou->brs + rd->bg_id;
   char *src = desc->buf_base + desc->buf_size * buf_idx;
-  buf = rb_str_new(src, cqe->res);
+  buf = rd->utf8_encoding ? rb_utf8_str_new(src, cqe->res) : rb_str_new(src, cqe->res);
   
   // add buffer back to buffer ring
   io_uring_buf_ring_add(

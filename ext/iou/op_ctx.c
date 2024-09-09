@@ -97,11 +97,12 @@ inline struct read_data *OpCtx_rd_get(VALUE self) {
   return &osd->data.rd;
 }
 
-inline void OpCtx_rd_set(VALUE self, VALUE buffer, int buffer_offset, unsigned bg_id) {
+inline void OpCtx_rd_set(VALUE self, VALUE buffer, int buffer_offset, unsigned bg_id, int utf8_encoding) {
   OpCtx_t *osd = RTYPEDDATA_DATA(self);
   osd->data.rd.buffer = buffer;
   osd->data.rd.buffer_offset = buffer_offset;
   osd->data.rd.bg_id = bg_id;
+  osd->data.rd.utf8_encoding = utf8_encoding;
 }
 
 inline int OpCtx_stop_signal_p(VALUE self) {

@@ -751,10 +751,6 @@ class PrepReadMultishotTest < IOURingBaseTest
   end
 
   def test_prep_read_multishot_utf8
-    # checking for UTF-8 incurs a serious performance degradation. We'll leave
-    # it for later...
-    skip
-
     r, w = IO.pipe
 
     bgid = ring.setup_buffer_ring(size: 4096, count: 1024)
