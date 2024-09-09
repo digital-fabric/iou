@@ -48,19 +48,19 @@ struct sa_data {
   socklen_t len;
 };
 
-typedef struct OpSpecData_t {
+typedef struct OpCtx_t {
   union {
     struct __kernel_timespec ts;
     struct sa_data sa;
   } data;
-} OpSpecData_t;
+} OpCtx_t;
 
 extern VALUE mIOU;
-extern VALUE cOpSpecData;
+extern VALUE cOpCtx;
 
-struct __kernel_timespec *OpSpecData_ts_get(VALUE self);
-void OpSpecData_ts_set(VALUE self, VALUE value);
+struct __kernel_timespec *OpCtx_ts_get(VALUE self);
+void OpCtx_ts_set(VALUE self, VALUE value);
 
-struct sa_data *OpSpecData_sa_get(VALUE self);
+struct sa_data *OpCtx_sa_get(VALUE self);
 
 #endif // IOU_H

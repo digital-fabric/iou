@@ -36,4 +36,4 @@ a fast C-level API for accessing op properties (the op type, etc), instead of
 calling rb_hash_aref everytime we need to access properties. This should improve
 performance (remains to be proven...)
 
-This ctx object will replace the current OpSpecData class.
+This ctx object will replace the current OpCtx class.

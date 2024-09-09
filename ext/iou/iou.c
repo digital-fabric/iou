@@ -256,13 +256,13 @@ VALUE IOU_prep_accept(VALUE self, VALUE spec) {
   VALUE fd = values[0];
   VALUE multishot = rb_hash_aref(spec, SYM_multishot);
 
-  VALUE spec_data = rb_funcall(cOpSpecData, rb_intern("new"), 0);
+  VALUE spec_data = rb_funcall(cOpCtx, rb_intern("new"), 0);
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
   rb_hash_aset(spec, SYM_spec_data, spec_data);
   store_spec(iou, spec, id, SYM_accept);
 
-  struct sa_data *sa = OpSpecData_sa_get(spec_data);
+  struct sa_data *sa = OpCtx_sa_get(spec_data);
   if (RTEST(multishot))
     io_uring_prep_multishot_accept(sqe, NUM2INT(fd), &sa->addr, &sa->len, 0);
   else
@@ -409,15 +409,15 @@ VALUE IOU_prep_timeout(VALUE self, VALUE spec) {
   VALUE multishot = rb_hash_aref(spec, SYM_multishot);
   unsigned flags = RTEST(multishot) ? IORING_TIMEOUT_MULTISHOT : 0;
 
-  VALUE spec_data = rb_funcall(cOpSpecData, rb_intern("new"), 0);
-  OpSpecData_ts_set(spec_data, interval);
+  VALUE spec_data = rb_funcall(cOpCtx, rb_intern("new"), 0);
+  OpCtx_ts_set(spec_data, interval);
 
   struct io_uring_sqe *sqe = get_sqe(iou);
   sqe->user_data = id_i;
   rb_hash_aset(spec, SYM_spec_data, spec_data);
   store_spec(iou, spec, id, SYM_timeout);
 
-  io_uring_prep_timeout(sqe, OpSpecData_ts_get(spec_data), 0, flags);
+  io_uring_prep_timeout(sqe, OpCtx_ts_get(spec_data), 0, flags);
   iou->unsubmitted_sqes++;
   return id;
 }
