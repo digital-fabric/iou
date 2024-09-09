@@ -4,7 +4,6 @@
 
 VALUE mIOU;
 VALUE cRing;
-VALUE cArgumentError;
 
 VALUE SYM_accept;
 VALUE SYM_block;
@@ -151,7 +150,7 @@ done:
 
 static inline void get_required_kwargs(VALUE spec, VALUE *values, int argc, ...) {
   if (TYPE(spec) != T_HASH)
-    rb_raise(cArgumentError, "Expected keyword arguments");
+    rb_raise(rb_eArgError, "Expected keyword arguments");
 
   va_list ptr;
   va_start(ptr, argc);
@@ -159,7 +158,7 @@ static inline void get_required_kwargs(VALUE spec, VALUE *values, int argc, ...)
     VALUE k = va_arg(ptr, VALUE);
     VALUE v = rb_hash_aref(spec, k);
     if (NIL_P(v))
-      rb_raise(cArgumentError, "Missing %"PRIsVALUE" value", k);
+      rb_raise(rb_eArgError, "Missing %"PRIsVALUE" value", k);
     values[i] = v;
   }
   va_end(ptr);
@@ -294,13 +293,13 @@ VALUE IOU_prep_cancel(VALUE self, VALUE spec) {
     return prep_cancel_id(iou, NUM2UINT(spec));
   
   if (TYPE(spec) != T_HASH)
-    rb_raise(cArgumentError, "Expected operation id or keyword arguments");
+    rb_raise(rb_eArgError, "Expected operation id or keyword arguments");
 
   VALUE id = rb_hash_aref(spec, SYM_id);
   if (!NIL_P(id))
     return prep_cancel_id(iou, NUM2UINT(id));
 
-  rb_raise(cArgumentError, "Missing operation id");
+  rb_raise(rb_eArgError, "Missing operation id");
 }
 
 VALUE IOU_prep_close(VALUE self, VALUE spec) {
@@ -718,8 +717,6 @@ void Init_IOU(void) {
   rb_define_method(cRing, "wait_for_completion", IOU_wait_for_completion, 0);
   rb_define_method(cRing, "process_completions", IOU_process_completions, -1);
   rb_define_method(cRing, "process_completions_loop", IOU_process_completions_loop, 0);
-
-  cArgumentError = rb_const_get(rb_cObject, rb_intern("ArgumentError"));
 
   SYM_accept        = MAKE_SYM("accept");
   SYM_block         = MAKE_SYM("block");
