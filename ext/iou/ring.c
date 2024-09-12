@@ -701,6 +701,8 @@ done:
 #define MAKE_SYM(sym) ID2SYM(rb_intern(sym))
 
 void Init_IOURing(void) {
+  rb_ext_ractor_safe(true);
+
   mIOU = rb_define_module("IOU");
   cRing = rb_define_class_under(mIOU, "Ring", rb_cObject);
   rb_define_alloc_func(cRing, IOURing_allocate);

@@ -845,3 +845,32 @@ class LinkTest < IOURingBaseTest
     assert_equal 'foobar', r.read
   end
 end
+
+class RactorTest < Minitest::Test
+  def test_ractor
+    # Ractor is still experimental in Ruby 3.x.x
+    old_warning_status = Warning[:experimental]
+    Warning[:experimental] = false
+
+    r, w = IO.pipe
+
+    w << 'foobar'
+
+    ractor = Ractor.new(r.fileno) do |fd|
+      ring = IOU::Ring.new
+      id = ring.prep_read(fd: fd, buffer: +'', len: 42)
+      ring.submit
+      c = ring.wait_for_completion
+      [id, c]
+    end
+
+    id, c = ractor.take
+    assert_equal 1, id
+    assert_kind_of Hash, c
+    assert_equal :read, c[:op]
+    assert_equal 'foobar', c[:buffer]
+
+  ensure
+    Warning[:experimental] = old_warning_status
+  end
+end
